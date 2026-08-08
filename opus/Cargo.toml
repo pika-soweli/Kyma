@@ -1,0 +1,12 @@
+[package]
+name = "opus"
+version = "0.1.0"
+edition = "2021"
+description = "toki-musi compiler — .tm to .bm (Bin Musi IR)"
+
+[dependencies]
+sonus = { path = "../sonus" }
+
+[[bin]]
+name = "opus"
+path = "src/main.rs"

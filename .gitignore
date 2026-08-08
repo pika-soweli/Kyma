@@ -1,0 +1,14 @@
+# Build artifacts
+/target
+**/target
+
+# Cargo lock files (one per workspace member, not shared)
+**/Cargo.lock
+
+# Rust compiler cache
+*.d
+*.pdb
+*.rlib
+*.rmeta
+*.exe
+*.bin

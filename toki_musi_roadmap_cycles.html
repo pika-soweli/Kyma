@@ -1,0 +1,254 @@
+<style>
+:root {
+  color-scheme: light;
+  --surface: #F7F7F8;
+  --surface-muted: #EFEFF2;
+  --text: #171717;
+  --text-muted: #52525B;
+  --border: rgba(23, 23, 23, 0.12);
+  --brand: #4B3FE3;
+  --brand-soft: #F2F7FF;
+  --brand-soft-strong: #E5EAFF;
+  --brand-text: #1A1759;
+  --brand-on: #FFFFFF;
+  --accent: #27D2BF;
+  --accent-soft: #EAFBF8;
+  --accent-text: #0F766E;
+  --accent-2: #F87454;
+  --radius: 8px;
+  --radius-card: 12px;
+  --radius-full: 999px;
+  --spacer-4: 4px;
+  --spacer-8: 8px;
+  --spacer-12: 12px;
+  --spacer-16: 16px;
+  --spacer-20: 20px;
+  --spacer-24: 24px;
+  --font-sans: "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+  --text-caption: 12px/18px;
+  --text-body: 14px/20px;
+  --text-title: 16px/24px;
+  --text-code: 13px/20px;
+}
+:root[data-widget-theme="dark"] {
+  color-scheme: dark;
+  --surface: #171717;
+  --surface-muted: #262626;
+  --text: #E5E5E5;
+  --text-muted: #A1A1AA;
+  --border: rgba(229, 229, 229, 0.12);
+  --brand: #6054F1;
+  --brand-soft: #1A1759;
+  --brand-soft-strong: #3C2ECA;
+  --brand-text: #CFD8FF;
+}
+.widget {
+  color: var(--text);
+  background: transparent;
+  font: var(--weight-regular) var(--text-body) var(--font-sans);
+}
+.wroot {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--spacer-20);
+}
+.wroot .head {
+  font: var(--weight-medium) var(--text-title) var(--font-sans);
+  margin-bottom: var(--spacer-4);
+}
+.wroot .sub {
+  font: var(--weight-regular) var(--text-caption) var(--font-sans);
+  color: var(--text-muted);
+  margin-bottom: var(--spacer-20);
+}
+.mvp {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--spacer-12) var(--spacer-16);
+  margin-bottom: var(--spacer-20);
+}
+.mvp .mvp-label {
+  font: var(--weight-strong) var(--text-caption) var(--font-sans);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--spacer-4);
+}
+.mvp .mvp-items {
+  font: var(--weight-regular) var(--text-code) var(--font-mono);
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.timeline {
+  position: relative;
+  padding-left: 28px;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+.cycle {
+  position: relative;
+  margin-bottom: var(--spacer-16);
+}
+.cycle:last-child { margin-bottom: 0; }
+.cycle .dot {
+  position: absolute;
+  left: -28px;
+  top: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 2px solid var(--brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: var(--weight-strong) 10px/1 var(--font-sans);
+  color: var(--brand);
+}
+.cycle .card {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius);
+  padding: var(--spacer-12) var(--spacer-16);
+}
+.cycle:nth-child(2) .card { border-left-color: var(--accent); }
+.cycle:nth-child(2) .dot { border-color: var(--accent); color: var(--accent); }
+.cycle:nth-child(3) .card { border-left-color: var(--accent-2); }
+.cycle:nth-child(3) .dot { border-color: var(--accent-2); color: var(--accent-2); }
+.cycle:nth-child(4) .card { border-left-color: var(--brand); }
+.cyc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--spacer-8);
+}
+.cyc-title {
+  font: var(--weight-strong) var(--text-body) var(--font-sans);
+  color: var(--text);
+}
+.cyc-tag {
+  font: var(--weight-medium) var(--text-caption) var(--font-sans);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.cyc-desc {
+  font: var(--weight-regular) var(--text-caption) var(--font-sans);
+  color: var(--text-muted);
+  margin-bottom: var(--spacer-8);
+}
+.feat-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacer-4) var(--spacer-12);
+}
+.feat {
+  font: var(--weight-regular) var(--text-code) var(--font-mono);
+  color: var(--text);
+  padding: var(--spacer-4) var(--spacer-8);
+  background: var(--surface);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+@media (max-width: 520px) {
+  .feat-list { grid-template-columns: 1fr; }
+}
+</style>
+<div class="widget" data-dynamic-ui-widget data-template="compact-table-visual" data-mounted="true">
+  <div class="wroot">
+    <div class="head">toki-musi 语法开发路线图</div>
+    <div class="sub">MVP 之上的四个迭代周期，由近及远、由表现力到分析力</div>
+    <div class="mvp">
+      <div class="mvp-label">Cycle 0 — MVP 基础（已就绪）</div>
+      <div class="mvp-items">音符 C4 · 休止 R · 时值 :N / :N. · @key @tempo @time @dur · track/section · [Cmaj7] · | · ; · @inst</div>
+    </div>
+    <div class="timeline">
+      <div class="cycle">
+        <div class="dot">1</div>
+        <div class="card">
+          <div class="cyc-head">
+            <span class="cyc-title">连音与表现记号</span>
+            <span class="cyc-tag">expression</span>
+          </div>
+          <div class="cyc-desc">让序列「会呼吸」——连音线、连音符、装饰音、渐强渐弱与速度变化</div>
+          <div class="feat-list">
+            <div class="feat">~ 连音线</div>
+            <div class="feat">3:2 {…} 连音符</div>
+            <div class="feat">grace(…) 装饰音</div>
+            <div class="feat">@cresc @decresc</div>
+            <div class="feat">@rit @accel</div>
+            <div class="feat">@fermata 延音</div>
+          </div>
+        </div>
+      </div>
+      <div class="cycle">
+        <div class="dot">2</div>
+        <div class="card">
+          <div class="cyc-head">
+            <span class="cyc-title">结构复用与反复</span>
+            <span class="cyc-tag">structure</span>
+          </div>
+          <div class="cyc-desc">让谱面「可组织」——变量抽取、传统反复记号、跳房子、文件包含</div>
+          <div class="feat-list">
+            <div class="feat">let / $name 变量</div>
+            <div class="feat">|: … :| 反复记号</div>
+            <div class="feat">:|1 :|2 跳房子</div>
+            <div class="feat">@repeat(N) 段落反复</div>
+            <div class="feat">include "file.tm"</div>
+            <div class="feat">section 嵌套</div>
+          </div>
+        </div>
+      </div>
+      <div class="cycle">
+        <div class="dot">3</div>
+        <div class="card">
+          <div class="cyc-head">
+            <span class="cyc-title">多声部与和弦进阶</span>
+            <span class="cyc-tag">harmony</span>
+          </div>
+          <div class="cyc-desc">让织体「有厚度」——多声部、Slash 和弦、和弦变更、动态力度</div>
+          <div class="feat-list">
+            <div class="feat">voice "R/L" {…}</div>
+            <div class="feat">[Cmaj7/B3] slash 进阶</div>
+            <div class="feat">[C add9] [C sus4]</div>
+            <div class="feat">[C no5] 去音</div>
+            <div class="feat">@dyn(p … ff)</div>
+            <div class="feat">@pedal(sustain, on/off)</div>
+          </div>
+        </div>
+      </div>
+      <div class="cycle">
+        <div class="dot">4</div>
+        <div class="card">
+          <div class="cyc-head">
+            <span class="cyc-title">乐理分析集成</span>
+            <span class="cyc-tag">analysis</span>
+          </div>
+          <div class="cyc-desc">让语言「懂乐理」——调用 kinds 领域模型进行实时分析与变换</div>
+          <div class="feat-list">
+            <div class="feat">@transpose(+5) 转调</div>
+            <div class="feat">@analyze(chord) 识别</div>
+            <div class="feat">@scale(C, dorian) 匹配</div>
+            <div class="feat">pcset {0,4,7}</div>
+            <div class="feat">@voicing(close)</div>
+            <div class="feat">MIDI / LilyPond 导出</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
