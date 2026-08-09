@@ -64,11 +64,10 @@ cargo run --bin opus -- --decode examples/canon.bm
 
 ## Roadmap
 
-| Cycle | Feature |
-|-------|---------|
-| Cycle 1 | MIDI exporter — `.bm` → `.mid` |
-| Cycle 2 | Text renderer — terminal-friendly ASCII score view |
-| Cycle 3 | Built-in audio player — WebAudio / cpal synthesis |
-| Cycle 4 | Image exporter — PNG / SVG sheet music |
-
-See [PLANNING.md](PLANNING.md) for full details.
+| Cycle | Feature | Status |
+|-------|---------|--------|
+| Cycle 0 | MVP — toki-musi compiler, sonus domain model, `.bm` binary IR | ✅ Done |
+| Cycle 1 | MIDI exporter — `.tm` → `.mid` | 🔄 In Progress |
+| Cycle 2 | Text renderer — terminal-friendly ASCII score view | ⏳ Planned |
+| Cycle 3 | Built-in audio player — cpal synthesis | ⏳ Planned |
+| Cycle 4 | Image exporter — PNG / SVG sheet music | ⏳ Planned |
