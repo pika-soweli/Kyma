@@ -64,10 +64,10 @@ cargo run --bin opus -- --decode examples/canon.bm
 
 ## Roadmap
 
-| Cycle | Feature | Status |
-|-------|---------|--------|
-| Cycle 0 | MVP — toki-musi compiler, sonus domain model, `.bm` binary IR | ✅ Done |
-| Cycle 1 | MIDI exporter — `.tm` → `.mid` | 🔄 In Progress |
-| Cycle 2 | Text renderer — terminal-friendly ASCII score view | ⏳ Planned |
-| Cycle 3 | Built-in audio player — cpal synthesis | ⏳ Planned |
-| Cycle 4 | Image exporter — PNG / SVG sheet music | ⏳ Planned |
+| Cycle | Phase | Feature |
+|-------|-------|---------|
+| **0** ✅ | MVP | 音符 C4 · 休止 R · 时值 :N / :N. · @key @tempo @time @dur · track/section · [Cmaj7] · | · ; · @inst |
+| **1** | expression | ~ 连音线 · 3:2 {…} 连音符 · grace(…) 装饰音 · @cresc @decresc · @rit @accel · @fermata |
+| **2** | structure | let / $name 变量 · |: … :| 反复记号 · :|1 :|2 跳房子 · @repeat(N) 段落反复 · include "file.tm" · section 嵌套 |
+| **3** | harmony | voice "R/L" {…} 多声部 · [Cmaj7/B3] slash 和弦 · [C add9] [C sus4] · [C no5] 去音 · @dyn(p…ff) · @pedal(sustain) |
+| **4** | analysis | @transpose(+5) · @analyze(chord) · @scale(C, dorian) · pcset {0,4,7} · @voicing(close) · MIDI / LilyPond 导出 |
