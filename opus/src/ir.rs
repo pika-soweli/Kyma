@@ -1,4 +1,4 @@
-﻿//! 二进制中间表示 (Bin Musi IR) — 编码器 / 解码器。
+//! 二进制中间表示 (Bin Musi IR) — 编码器 / 解码器。
 //!
 //! ## .bm 格式 v1
 //!
@@ -25,8 +25,8 @@
 
 use sonus::{
     Accidental, AlterType, Chord, ChordAlterItem, ChordQuality, ChordSymbol,
-    Duration, InstrumentKind, Key, Measure, MeasureEvent, Note, NoteKind,
-    NoteName, Pitch, ScaleType, Score, Section, Tempo, TimeSig, Track,
+    Duration, GraceNote, InstrumentKind, Key, Measure, MeasureEvent, Note, NoteKind,
+    NoteName, Pitch, ScaleType, Score, Section, Tempo, TimeSig, Track, Tuplet,
 };
 
 // ── 枚举 ↔ u8 转换 ────────────────────────────────────────
@@ -135,6 +135,10 @@ impl Writer {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
 
+    fn u32(&mut self, v: u32) {
+        self.buf.extend_from_slice(&v.to_le_bytes());
+    }
+
     fn string(&mut self, s: &str) {
         let bytes = s.as_bytes();
         self.u16(bytes.len() as u16);
@@ -195,6 +199,20 @@ impl<'a> Reader<'a> {
         }
         let v = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
         self.pos += 2;
+        Ok(v)
+    }
+
+    fn u32(&mut self) -> Result<u32, IrError> {
+        if self.pos + 4 > self.buf.len() {
+            return Err(IrError::UnexpectedEof);
+        }
+        let v = u32::from_le_bytes([
+            self.buf[self.pos],
+            self.buf[self.pos + 1],
+            self.buf[self.pos + 2],
+            self.buf[self.pos + 3],
+        ]);
+        self.pos += 4;
         Ok(v)
     }
 
@@ -370,6 +388,40 @@ fn encode_event(w: &mut Writer, event: &MeasureEvent) {
             // Cycle 0: 控制事件暂不编码
             w.u8(3);
         }
+        MeasureEvent::Tuplet(t) => {
+            w.u8(4); // Tuplet
+            w.u32(t.tuplet_n);
+            w.u32(t.tuplet_m);
+            w.u16(t.notes.len() as u16);
+            for note in &t.notes {
+                if note.is_rest() {
+                    w.u8(1);
+                    w.duration(&note.duration);
+                } else {
+                    w.u8(0);
+                    if let NoteKind::Normal(pitch) = &note.kind {
+                        w.pitch(pitch);
+                    }
+                    w.duration(&note.duration);
+                    w.u8(note.velocity());
+                }
+            }
+        }
+        MeasureEvent::GraceNote(g) => {
+            w.u8(5); // GraceNote
+            let note = &g.note;
+            if note.is_rest() {
+                w.u8(1);
+                w.duration(&note.duration);
+            } else {
+                w.u8(0);
+                if let NoteKind::Normal(pitch) = &note.kind {
+                    w.pitch(pitch);
+                }
+                w.duration(&note.duration);
+                w.u8(note.velocity());
+            }
+        }
     }
 }
 
@@ -526,6 +578,54 @@ fn decode_measure(r: &mut Reader, index: u32) -> Result<Measure, IrError> {
             }
             3 => {
                 // Control — Cycle 0 跳过
+            }
+            4 => {
+                // Tuplet
+                let tuplet_n = r.u32()?;
+                let tuplet_m = r.u32()?;
+                let count = r.u16()?;
+                let mut notes = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    // 内部 Note/Rest/Chord 事件需要重新解析；这里简化：只读 Note/Rest
+                    let tag = r.u8()?;
+                    match tag {
+                        0 => {
+                            let pitch = r.pitch()?;
+                            let duration = r.duration()?;
+                            let velocity = r.u8()?;
+                            let mut note = Note::new_note(pitch, duration, 0);
+                            note.set_velocity(velocity);
+                            notes.push(note);
+                        }
+                        1 => {
+                            let duration = r.duration()?;
+                            notes.push(Note::new_rest(duration, 0));
+                        }
+                        _ => return Err(IrError::BadEventTag(tag)),
+                    }
+                }
+                measure.push_event(MeasureEvent::Tuplet(Tuplet::new(tuplet_n, tuplet_m, notes)));
+            }
+            5 => {
+                // GraceNote
+                let tag = r.u8()?;
+                match tag {
+                    0 => {
+                        let pitch = r.pitch()?;
+                        let duration = r.duration()?;
+                        let velocity = r.u8()?;
+                        let mut note = Note::new_note(pitch, duration, 0);
+                        note.set_velocity(velocity);
+                        measure.push_event(MeasureEvent::GraceNote(GraceNote::new(note)));
+                    }
+                    1 => {
+                        let duration = r.duration()?;
+                        measure.push_event(MeasureEvent::GraceNote(GraceNote::new(
+                            Note::new_rest(duration, 0),
+                        )));
+                    }
+                    _ => return Err(IrError::BadEventTag(tag)),
+                }
             }
             _ => return Err(IrError::BadEventTag(tag)),
         }

@@ -1,4 +1,4 @@
-﻿//! Token 类型定义 — toki-musi 新语法 v2。
+//! Token 类型定义 — toki-musi 新语法 v2。
 //!
 //! 新语法关键变化：
 //! - 头部用 `@keyword(value)` 语法
@@ -20,6 +20,7 @@ pub enum TokenKind {
     Section,
     Voice,
     Let,
+    Repeat,
 
     // ── 字面量 ──
     StringLit(String),
@@ -50,6 +51,8 @@ pub enum TokenKind {
     Pipe,   // |
     Colon,  // : (用于 tuplet 比例 3:2，非时值上下文)
     Tilde,  // ~ 连音线
+    Grace,  // grace 关键字
+    ColonColon, // || 用于 tuplet 边界
 
     // ── 特殊 ──
     Eof,
@@ -76,6 +79,8 @@ pub fn keyword_lookup(s: &str) -> Option<TokenKind> {
         "section" => Some(TokenKind::Section),
         "voice" => Some(TokenKind::Voice),
         "let" => Some(TokenKind::Let),
+        "repeat" => Some(TokenKind::Repeat),
+        "grace" => Some(TokenKind::Grace),
         _ => None,
     }
 }
