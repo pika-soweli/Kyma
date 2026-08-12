@@ -194,14 +194,7 @@ impl Lexer {
             '@' => { self.advance(); return Ok(Token::new(TokenKind::At, line, col)); }
             '{' => { self.advance(); return Ok(Token::new(TokenKind::LBrace, line, col)); }
             '}' => { self.advance(); return Ok(Token::new(TokenKind::RBrace, line, col)); }
-            '|' => {
-                self.advance();
-                if self.peek() == Some('|') {
-                    self.advance();
-                    return Ok(Token::new(TokenKind::ColonColon, line, col));
-                }
-                return Ok(Token::new(TokenKind::Pipe, line, col));
-            }
+            '|' => { self.advance(); return Ok(Token::new(TokenKind::Pipe, line, col)); }
             '[' => { self.advance(); return Ok(Token::new(TokenKind::LBracket, line, col)); }
             ']' => { self.advance(); return Ok(Token::new(TokenKind::RBracket, line, col)); }
             '/' => { self.advance(); return Ok(Token::new(TokenKind::Slash, line, col)); }

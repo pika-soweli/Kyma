@@ -1,4 +1,4 @@
-//! magnisonus — toki-musi 编译器顶层 CLI
+//! kyma — toki-musi 编译器顶层 CLI
 //!
 //! 子命令：
 //!   compile  input.tm [-o output.bm]     编译 .tm → .bm
@@ -7,7 +7,7 @@
 //!   help                                 显示帮助信息
 //!
 //! 用法：
-//!   magnisonus <subcommand> [args...]
+//!   kyma <subcommand> [args...]
 
 use std::env;
 use std::fs;
@@ -17,21 +17,21 @@ use std::process::ExitCode;
 const VERSION: &str = "0.1.0";
 
 fn print_usage() {
-    eprintln!("magnisonus v{VERSION} — toki-musi compiler & score tools");
+    eprintln!("kyma v{VERSION} — toki-musi compiler & score tools");
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("  magnisonus compile <input.tm> [-o output.bm]   Compile to .bm binary");
-    eprintln!("  magnisonus decode  <input.bm>                  Decode .bm and print score");
-    eprintln!("  magnisonus show    <input.tm> [-f text|bm]     Render score to text");
+    eprintln!("  kyma compile <input.tm> [-o output.bm]   Compile to .bm binary");
+    eprintln!("  kyma decode  <input.bm>                  Decode .bm and print score");
+    eprintln!("  kyma show    <input.tm> [-f text|bm]     Render score to text");
     eprintln!();
     eprintln!("OPTIONS:");
     eprintln!("  -h, --help     Print this help");
     eprintln!("  -V, --version  Print version");
     eprintln!();
     eprintln!("EXAMPLES:");
-    eprintln!("  magnisonus compile examples/canon.tm");
-    eprintln!("  magnisonus decode  examples/canon.bm");
-    eprintln!("  magnisonus show    examples/canon.tm -f text");
+    eprintln!("  kyma compile examples/canon.tm");
+    eprintln!("  kyma decode  examples/canon.bm");
+    eprintln!("  kyma show    examples/canon.tm -f text");
 }
 
 // ── compile: .tm → .bm ──────────────────────────────────
@@ -145,8 +145,6 @@ fn cmd_decode(input_path: &str) -> ExitCode {
                     .map(|e| match e {
                         sonus::MeasureEvent::Note(n) => n.display(),
                         sonus::MeasureEvent::Chord(c) => c.display(),
-                        sonus::MeasureEvent::Tuplet(t) => t.display(),
-                        sonus::MeasureEvent::GraceNote(g) => g.display(),
                         sonus::MeasureEvent::Control(_) => "(ctrl)".to_string(),
                     })
                     .collect();
@@ -235,8 +233,6 @@ fn cmd_show(input_path: &str, format: &str) -> ExitCode {
                     .map(|e| match e {
                         sonus::MeasureEvent::Note(n) => n.display(),
                         sonus::MeasureEvent::Chord(c) => c.display(),
-                        sonus::MeasureEvent::Tuplet(t) => t.display(),
-                        sonus::MeasureEvent::GraceNote(g) => g.display(),
                         sonus::MeasureEvent::Control(ctrl) => match ctrl {
                             sonus::LocalControl::LocalKey(k) => format!("@key({})", k.display()),
                             sonus::LocalControl::LocalTempo(t) => format!("@tempo({})", t.bpm()),
@@ -306,8 +302,6 @@ fn render_score(score: &sonus::Score) -> ExitCode {
                     .map(|e| match e {
                         sonus::MeasureEvent::Note(n) => n.display(),
                         sonus::MeasureEvent::Chord(c) => c.display(),
-                        sonus::MeasureEvent::Tuplet(t) => t.display(),
-                        sonus::MeasureEvent::GraceNote(g) => g.display(),
                         sonus::MeasureEvent::Control(_) => "(ctrl)".to_string(),
                     })
                     .collect();
@@ -336,13 +330,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "-V" | "--version" => {
-            println!("magnisonus {VERSION}");
+            println!("kyma {VERSION}");
             ExitCode::SUCCESS
         }
         "compile" => {
             if args.len() < 3 {
                 eprintln!("error: compile requires an input file");
-                eprintln!("usage: magnisonus compile <input.tm> [-o output.bm]");
+                eprintln!("usage: kyma compile <input.tm> [-o output.bm]");
                 return ExitCode::from(1);
             }
             let input_path = &args[2];
@@ -356,7 +350,7 @@ fn main() -> ExitCode {
         "decode" => {
             if args.len() < 3 {
                 eprintln!("error: decode requires a .bm file path");
-                eprintln!("usage: magnisonus decode <input.bm>");
+                eprintln!("usage: kyma decode <input.bm>");
                 return ExitCode::from(1);
             }
             cmd_decode(&args[2])
@@ -364,7 +358,7 @@ fn main() -> ExitCode {
         "show" => {
             if args.len() < 3 {
                 eprintln!("error: show requires an input file");
-                eprintln!("usage: magnisonus show <input.tm> [-f text|bm]");
+                eprintln!("usage: kyma show <input.tm> [-f text|bm]");
                 return ExitCode::from(1);
             }
             let input_path = &args[2];

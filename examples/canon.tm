@@ -11,6 +11,7 @@
 
 ; ── 主旋律：卡农模仿（延迟两拍进入）──
 track "melody" violin {
+    ; Cycle 1 — A段（4+4小节的卡农模式）
     section "A" repeat(2) {
         F#5:4 E5:4 D5:4 C#5:4 |
         B4:4 A4:4 B4:4 C#5:4 |
@@ -18,19 +19,19 @@ track "melody" violin {
         B4:4 A4:4 B4:4 A4:4 |
     }
 
+    ; Cycle 2 — B段（转调色彩，Bm→F#m→G→A）
     section "B" {
-        ; 三连音装饰句
-        3:2 {D5:8 F#5:8 A5:8} |
+        D5:4 F#5:4 A5:4 G5:4 |
         F#5:4 E5:4 D5:4 C#5:4 |
         B4:4 D5:4 F#5:4 E5:4 |
         D5:4 C#5:4 B4:4 A4:4 |
-        ; 装饰音进入
-        grace(C#5:16) D5:8 E5:8 |
+        B4:4 D5:4 F#5:4 E5:4 |
         D5:4 C#5:4 B4:4 A4:4 |
         B4:4 A4:4 B4:4 A4:4 |
         G4:4 A4:4 B4:4 C#5:4 |
     }
 
+    ; Cycle 3 — A' 再现（同A，用 repeat(2) 复用）
     section "A'" repeat(2) {
         F#5:4 E5:4 D5:4 C#5:4 |
         B4:4 A4:4 B4:4 C#5:4 |
@@ -38,6 +39,7 @@ track "melody" violin {
         B4:4 A4:4 B4:4 A4:4 |
     }
 
+    ; Cycle 4 — Coda（终止式）
     section "Coda" {
         A4:4 B4:4 C#5:4 D5:4 |
         E5:4 D5:4 C#5:4 B4:4 |

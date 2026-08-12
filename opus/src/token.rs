@@ -51,8 +51,6 @@ pub enum TokenKind {
     Pipe,   // |
     Colon,  // : (用于 tuplet 比例 3:2，非时值上下文)
     Tilde,  // ~ 连音线
-    Grace,  // grace 关键字
-    ColonColon, // || 用于 tuplet 边界
 
     // ── 特殊 ──
     Eof,
@@ -80,7 +78,6 @@ pub fn keyword_lookup(s: &str) -> Option<TokenKind> {
         "voice" => Some(TokenKind::Voice),
         "let" => Some(TokenKind::Let),
         "repeat" => Some(TokenKind::Repeat),
-        "grace" => Some(TokenKind::Grace),
         _ => None,
     }
 }

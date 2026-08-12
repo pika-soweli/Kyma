@@ -29,8 +29,8 @@ use crate::lexer::CompileError;
 use crate::token::*;
 use sonus::{
     Accidental, Chord, ChordAlterItem, ChordQuality, ChordSymbol, AlterType,
-    Duration, GraceNote, InstrumentKind, Key, LocalControl, Measure, MeasureEvent, Note, NoteName,
-    Pitch, ScaleType, Score, Section, Tempo, TimeSig, Track, Tuplet,
+    Duration, InstrumentKind, Key, Measure, MeasureEvent, Note, NoteName,
+    Pitch, ScaleType, Score, Section, Tempo, TimeSig, Track,
 };
 
 /// 全部 30 种音阶类型，用于字符串 ↔ 枚举转换。
@@ -94,10 +94,6 @@ impl Parser {
 
     fn peek(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&EOF_TOKEN)
-    }
-
-    fn peek_nth(&self, n: usize) -> Option<&Token> {
-        self.tokens.get(self.pos + n)
     }
 
     fn advance(&mut self) {
@@ -291,11 +287,6 @@ impl Parser {
                     current_measure = Measure::new(measure_idx);
                     self.advance();
                 }
-                TokenKind::At => {
-                    // 段落内局部控制事件：@key(@tempo(@time(@dyn
-                    let ctrl = self.parse_local_control()?;
-                    current_measure.push_event(ctrl);
-                }
                 TokenKind::Eof => {
                     return Err(self.err("unexpected EOF in section"));
                 }
@@ -322,14 +313,6 @@ impl Parser {
                 let chord = self.parse_chord()?;
                 Ok(MeasureEvent::Chord(chord))
             }
-            TokenKind::Grace => {
-                self.parse_grace()
-            }
-            // Tuplet: 数字后面跟 Duration (词法器把 :N 识别为 Duration)
-            // 例如 3:2 {C4:8 D4:8 E4:8} → IntLit(3) + Duration(2)
-            TokenKind::IntLit(n) if self.peek_nth(1).map_or(false, |t| matches!(t.kind, TokenKind::Duration { .. })) => {
-                self.parse_tuplet()
-            }
             TokenKind::NoteName(_) | TokenKind::Ident(_) => {
                 let note = self.parse_note()?;
                 // 连音线：消耗 ~ 及后续同音高音符（Cycle 0: 合并时值）
@@ -344,6 +327,7 @@ impl Parser {
                                 note.duration.base,
                                 note.duration.dotted || next.duration.dotted,
                             );
+                            // 连音不产生新事件，仅延长时值
                         }
                     }
                 }
@@ -351,127 +335,6 @@ impl Parser {
             }
             _ => Err(self.err("expected note, rest, or chord")),
         }
-    }
-
-    // ── Tuplet ──
-    // 3:2 {C4:8 D4:8 E4:8}
-    // 词法器将 3:2 解析为 IntLit(3) + Duration(2)
-    fn parse_tuplet(&mut self) -> Result<MeasureEvent, CompileError> {
-        let tuplet_n = match &self.peek().kind {
-            TokenKind::IntLit(n) => {
-                let n = *n;
-                self.advance();
-                n
-            }
-            _ => return Err(self.err("expected tuplet numerator")),
-        };
-        // 消耗 :N Duration token（即 tuplet_m）
-        let tuplet_m = match &self.peek().kind {
-            TokenKind::Duration { base, .. } => *base as u32,
-            _ => return Err(self.err("expected tuplet denominator")),
-        };
-        self.expect(&TokenKind::Duration { base: tuplet_m, dotted: false })?;
-        self.expect(&TokenKind::LBrace)?;
-
-        let mut notes = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::RBrace) {
-            let event = self.parse_event()?;
-            match event {
-                MeasureEvent::Note(n) => notes.push(n),
-                _ => return Err(self.err("tuplet only supports notes and rests")),
-            }
-        }
-        self.expect(&TokenKind::RBrace)?;
-
-        if notes.is_empty() {
-            return Err(self.err("tuplet must contain at least one note"));
-        }
-
-        Ok(MeasureEvent::Tuplet(Tuplet::new(tuplet_n, tuplet_m, notes)))
-    }
-
-    // ── Grace Note ──
-    // grace(C#5:8)
-    fn parse_grace(&mut self) -> Result<MeasureEvent, CompileError> {
-        self.advance(); // 'grace'
-        self.expect(&TokenKind::LParen)?;
-        let note = self.parse_note()?;
-        self.expect(&TokenKind::RParen)?;
-        Ok(MeasureEvent::GraceNote(GraceNote::new(note)))
-    }
-
-    // ── Local Control ──
-    // @key(D, minor) @tempo(90) @time(3/4) @dyn(mf)
-    fn parse_local_control(&mut self) -> Result<MeasureEvent, CompileError> {
-        self.expect(&TokenKind::At)?;
-        let name = match &self.peek().kind {
-            TokenKind::Ident(s) => s.clone(),
-            _ => return Err(self.err("expected control name")),
-        };
-        self.advance();
-        self.expect(&TokenKind::LParen)?;
-
-        let ctrl = match name.as_str() {
-            "key" => {
-                let root = self.parse_pitch()?;
-                self.expect(&TokenKind::Comma)?;
-                let scale_str = match &self.peek().kind {
-                    TokenKind::Ident(s) => s.clone(),
-                    _ => return Err(self.err("expected scale type")),
-                };
-                self.advance();
-                let scale = scale_type_from_str(&scale_str)
-                    .ok_or_else(|| self.err(&format!("unknown scale type: {}", scale_str)))?;
-                let key = Key::new(root, scale);
-                self.expect(&TokenKind::RParen)?;
-                MeasureEvent::Control(LocalControl::LocalKey(key))
-            }
-            "tempo" => {
-                let bpm = match &self.peek().kind {
-                    TokenKind::IntLit(n) => {
-                        let n = *n;
-                        self.advance();
-                        n
-                    }
-                    _ => return Err(self.err("expected tempo BPM")),
-                };
-                self.expect(&TokenKind::RParen)?;
-                MeasureEvent::Control(LocalControl::LocalTempo(Tempo::new(bpm as u16)))
-            }
-            "time" => {
-                let beats = match &self.peek().kind {
-                    TokenKind::IntLit(n) => {
-                        let n = *n;
-                        self.advance();
-                        n
-                    }
-                    _ => return Err(self.err("expected beats per bar")),
-                };
-                self.expect(&TokenKind::Slash)?;
-                let beat_val = match &self.peek().kind {
-                    TokenKind::IntLit(n) => {
-                        let n = *n;
-                        self.advance();
-                        n
-                    }
-                    _ => return Err(self.err("expected beat value")),
-                };
-                self.expect(&TokenKind::RParen)?;
-                MeasureEvent::Control(LocalControl::LocalTime(TimeSig::new(beats, beat_val)))
-            }
-            "dyn" => {
-                let dyn_str = match &self.peek().kind {
-                    TokenKind::Ident(s) => s.clone(),
-                    _ => return Err(self.err("expected dynamic marking")),
-                };
-                self.advance();
-                self.expect(&TokenKind::RParen)?;
-                MeasureEvent::Control(LocalControl::DynamicMark(dyn_str))
-            }
-            _ => return Err(self.err(&format!("unknown local control: @{}", name))),
-        };
-
-        Ok(ctrl)
     }
 
     fn parse_note(&mut self) -> Result<Note, CompileError> {
@@ -1016,88 +879,5 @@ mod tests {
     fn test_section_repeat_omitted() {
         let score = parse("track \"t\" {\nsection \"A\" {\nC4 |\n}\n}");
         assert_eq!(score.tracks[0].sections[0].repeat_times, None);
-    }
-
-    #[test]
-    fn test_tuplet() {
-        let score = parse("track \"t\" {\nsection \"s\" {\n3:2 {C4:8 D4:8 E4:8} |\n}\n}");
-        assert_eq!(score.tracks[0].sections[0].measures[0].events.len(), 1);
-        if let MeasureEvent::Tuplet(t) = &score.tracks[0].sections[0].measures[0].events[0] {
-            assert_eq!(t.tuplet_n, 3);
-            assert_eq!(t.tuplet_m, 2);
-            assert_eq!(t.notes.len(), 3);
-        } else {
-            panic!("expected tuplet");
-        }
-    }
-
-    #[test]
-    fn test_grace_note() {
-        let score = parse("track \"t\" {\nsection \"s\" {\ngrace(C#5:8) D5:4 |\n}\n}");
-        assert_eq!(score.tracks[0].sections[0].measures[0].events.len(), 2);
-        if let MeasureEvent::GraceNote(g) = &score.tracks[0].sections[0].measures[0].events[0] {
-            assert_eq!(g.note.pitch().unwrap().name, NoteName::C);
-            assert_eq!(g.note.pitch().unwrap().acc, Accidental::Sharp);
-        } else {
-            panic!("expected grace note");
-        }
-    }
-
-    #[test]
-    fn test_local_control_key() {
-        let score = parse("track \"t\" {\nsection \"s\" {\n@key(D, minor) C4 |\n}\n}");
-        if let MeasureEvent::Control(ctrl) = &score.tracks[0].sections[0].measures[0].events[0] {
-            match ctrl {
-                LocalControl::LocalKey(k) => {
-                    assert_eq!(k.root.name, NoteName::D);
-                    assert_eq!(k.scale_type, ScaleType::Minor);
-                }
-                _ => panic!("expected LocalKey"),
-            }
-        } else {
-            panic!("expected control");
-        }
-    }
-
-    #[test]
-    fn test_local_control_tempo() {
-        let score = parse("track \"t\" {\nsection \"s\" {\n@tempo(90) C4 |\n}\n}");
-        if let MeasureEvent::Control(ctrl) = &score.tracks[0].sections[0].measures[0].events[0] {
-            match ctrl {
-                LocalControl::LocalTempo(t) => assert_eq!(t.bpm(), 90),
-                _ => panic!("expected LocalTempo"),
-            }
-        } else {
-            panic!("expected control");
-        }
-    }
-
-    #[test]
-    fn test_local_control_time() {
-        let score = parse("track \"t\" {\nsection \"s\" {\n@time(3/4) C4 |\n}\n}");
-        if let MeasureEvent::Control(ctrl) = &score.tracks[0].sections[0].measures[0].events[0] {
-            match ctrl {
-                LocalControl::LocalTime(ts) => {
-                    assert_eq!(ts.beats_per_bar, 3);
-                    assert_eq!(ts.beat_value, 4);
-                }
-                _ => panic!("expected LocalTime"),
-            }
-        } else {
-            panic!("expected control");
-        }
-    }
-
-    #[test]
-    fn test_local_control_dyn() {
-        let score = parse("track \"t\" {\nsection \"s\" {\n@dyn(mf) C4 |\n}\n}");
-        if let MeasureEvent::Control(ctrl) = &score.tracks[0].sections[0].measures[0].events[0] {
-            match ctrl {
-                LocalControl::DynamicMark(d) => assert_eq!(d, "mf"),
-                _ => panic!("expected DynamicMark"),
-            }
-        } else {
-            panic!("expected control");
-        }
     }
 }

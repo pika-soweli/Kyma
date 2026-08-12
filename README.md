@@ -1,4 +1,4 @@
-# magnisonus
+# kyma
 
 A Rust music composition toolkit: a custom music language (**toki-musi**) with a compiler that produces a binary IR, backed by a pure music-theory domain model.
 
@@ -7,7 +7,7 @@ A Rust music composition toolkit: a custom music language (**toki-musi**) with a
 ## Workspace structure
 
 ```
-magnisonus/
+kyma/
 ├── sonus/   # Pure music-theory domain model (zero MIDI coupling)
 ├── opus/    # toki-musi compiler — .tm → .bm (Bin Musi IR)
 └── src/     # CLI entry point (top-level orchestrator)
@@ -19,7 +19,7 @@ magnisonus/
 |-------|---------|
 | `sonus` | Pitch, interval, scale, key, chord, duration, instrument, and score data model |
 | `opus` | Lexer / Parser / IR encoder/decoder for the toki-musi language |
-| `magnisonus` | Top-level CLI that coordinates both crates |
+| `kyma` | Top-level CLI that coordinates both crates |
 
 ## toki-musi language
 

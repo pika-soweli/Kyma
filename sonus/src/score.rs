@@ -3,12 +3,11 @@
 //! 层级：`Score` → `Track` → `Section` → `Measure` → `MeasureEvent`
 
 use super::chord::Chord;
-use super::grace_note::GraceNote;
 use super::note::Note;
 use super::key::Key;
 use super::tempo::Tempo;
 use super::instrument::InstrumentKind;
-use super::tuplet::Tuplet;
+
 /// 拍号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeSig {
@@ -75,8 +74,6 @@ pub enum LocalControl {
 pub enum MeasureEvent {
     Note(Note),
     Chord(Chord),
-    Tuplet(Tuplet),
-    GraceNote(GraceNote),
     Control(LocalControl),
 }
 
@@ -240,14 +237,6 @@ impl Score {
                             }
                             MeasureEvent::Chord(chord) => {
                                 chord.transpose(semitones);
-                            }
-                            MeasureEvent::Tuplet(t) => {
-                                for n in &mut t.notes {
-                                    n.transpose(semitones);
-                                }
-                            }
-                            MeasureEvent::GraceNote(g) => {
-                                g.note.transpose(semitones);
                             }
                             MeasureEvent::Control(_) => {}
                         }

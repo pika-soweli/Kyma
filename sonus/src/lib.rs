@@ -24,8 +24,6 @@ pub mod duration;
 pub mod tempo;
 pub mod note;
 pub mod instrument;
-pub mod tuplet;
-pub mod grace_note;
 pub mod score;
 
 pub use pitch::*;
@@ -38,6 +36,4 @@ pub use duration::*;
 pub use tempo::*;
 pub use note::*;
 pub use instrument::*;
-pub use tuplet::*;
-pub use grace_note::*;
 pub use score::*;

@@ -140,8 +140,6 @@ fn cmd_decode(input_path: &str) -> ExitCode {
                     match e {
                         sonus::MeasureEvent::Note(n) => n.display(),
                         sonus::MeasureEvent::Chord(c) => c.display(),
-                        sonus::MeasureEvent::Tuplet(t) => t.display(),
-                        sonus::MeasureEvent::GraceNote(g) => g.display(),
                         sonus::MeasureEvent::Control(_) => "(ctrl)".to_string(),
                     }
                 }).collect();
