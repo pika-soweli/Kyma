@@ -1,4 +1,4 @@
-﻿//! 调式 — 基于 `ScaleType` 的调号、音阶生成与转调。
+//! 调式 — 基于 `ScaleType` 的调号、音阶生成与转调。
 //!
 //! `Key` 取代旧 `KeyMode` 枚举，统一使用 30 种 `ScaleType` 定义调式。
 
@@ -262,5 +262,46 @@ mod tests {
     fn test_display() {
         let key = Key::major(p(NoteName::C, Accidental::Natural));
         assert_eq!(key.display(), "key(C major)");
+    }
+
+    #[test]
+    fn test_key_clone_copy() {
+        let k = Key::dorian(p(NoteName::D, Accidental::Natural));
+        let k2 = k;
+        assert_eq!(k.root_name(), k2.root_name());
+        assert_eq!(k.scale_type, k2.scale_type);
+    }
+
+    #[test]
+    fn test_key_eq() {
+        let a = Key::major(p(NoteName::C, Accidental::Natural));
+        let b = Key::major(p(NoteName::C, Accidental::Natural));
+        let c = Key::major(p(NoteName::G, Accidental::Natural));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_key_transposition_boundary() {
+        let k = Key::major(p(NoteName::B, Accidental::Natural));
+        let transposed = k.transpose(1);
+        assert_eq!(transposed.root_name(), "C");
+        assert!(transposed.is_major());
+    }
+
+    #[test]
+    fn test_scale_type_count() {
+        use super::super::scale::ScaleType;
+        let count = ScaleType::all().len();
+        assert!(count > 0);
+        assert!(count <= 50);
+    }
+
+    #[test]
+    fn test_key_scale_coverage() {
+        // All 7 diatonic notes are covered by scale()
+        let k = Key::major(p(NoteName::C, Accidental::Natural));
+        let notes = k.scale();
+        assert_eq!(notes.len(), 7);
     }
 }

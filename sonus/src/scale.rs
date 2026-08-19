@@ -1,4 +1,4 @@
-﻿//! 音阶类型字典 — 数据驱动，30 种音阶。
+//! 音阶类型字典 — 数据驱动，30 种音阶。
 //!
 //! 每种 `ScaleType` 通过 `intervals()` 返回半音间隔模式，
 //! 由 `Scale` / `Key` 负责生成具体音高。
@@ -229,16 +229,57 @@ impl ScaleType {
 
 // ── 音阶 ──────────────────────────────────────────────────
 
-/// 音阶：根音 + 音阶类型。
+/// 音阶进行方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScaleDirection {
+    Ascending,
+    Descending,
+}
+
+impl ScaleDirection {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "asc" | "ascending" | "up" => Some(Self::Ascending),
+            "desc" | "descending" | "down" => Some(Self::Descending),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ascending => "asc",
+            Self::Descending => "desc",
+        }
+    }
+
+    pub fn to_rmt(self) -> rmt::scale::Direction {
+        match self {
+            Self::Ascending => rmt::scale::Direction::Ascending,
+            Self::Descending => rmt::scale::Direction::Descending,
+        }
+    }
+}
+
+/// 音阶：根音 + 音阶类型 + 方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Scale {
     pub root: NoteName,
     pub scale_type: ScaleType,
+    pub direction: ScaleDirection,
 }
 
 impl Scale {
     pub fn new(root: NoteName, scale_type: ScaleType) -> Self {
-        Self { root, scale_type }
+        Self { root, scale_type, direction: ScaleDirection::Ascending }
+    }
+
+    pub fn new_with_direction(root: NoteName, scale_type: ScaleType, direction: ScaleDirection) -> Self {
+        Self { root, scale_type, direction }
+    }
+
+    pub fn with_direction(mut self, dir: ScaleDirection) -> Self {
+        self.direction = dir;
+        self
     }
 
     /// 返回音阶中所有音级类。
@@ -266,7 +307,104 @@ impl Scale {
     }
 
     pub fn display(&self) -> String {
-        format!("{} {}", self.root.as_char(), self.scale_type.display_name())
+        let dir = match self.direction {
+            ScaleDirection::Ascending => " ↑",
+            ScaleDirection::Descending => " ↓",
+        };
+        format!("{} {}{}", self.root.as_char(), self.scale_type.display_name(), dir)
+    }
+}
+
+// ── rust-music-theory 互转 ────────────────────────────────
+
+use crate::rmt;
+
+impl ScaleType {
+    /// 返回对应的 rmt (ScaleType, Option<Mode>)，若 rmt 不支持则返回 None。
+    pub fn to_rmt(&self) -> Option<(rmt::scale::ScaleType, Option<rmt::scale::Mode>)> {
+        use rmt::scale::{ScaleType as RS, Mode as RM};
+        match self {
+            Self::Major => Some((RS::Diatonic, Some(RM::Ionian))),
+            Self::Dorian => Some((RS::Diatonic, Some(RM::Dorian))),
+            Self::Phrygian => Some((RS::Diatonic, Some(RM::Phrygian))),
+            Self::Lydian => Some((RS::Diatonic, Some(RM::Lydian))),
+            Self::Mixolydian => Some((RS::Diatonic, Some(RM::Mixolydian))),
+            Self::Minor => Some((RS::Diatonic, Some(RM::Aeolian))),
+            Self::Locrian => Some((RS::Diatonic, Some(RM::Locrian))),
+            Self::HarmonicMinor => Some((RS::HarmonicMinor, None)),
+            Self::MelodicMinor => Some((RS::MelodicMinor, None)),
+            Self::MajorPentatonic => Some((RS::PentatonicMajor, None)),
+            Self::MinorPentatonic => Some((RS::PentatonicMinor, None)),
+            Self::Blues => Some((RS::Blues, None)),
+            Self::WholeTone => Some((RS::WholeTone, None)),
+            Self::Chromatic => Some((RS::Chromatic, None)),
+            _ => None,
+        }
+    }
+
+    /// 从 rmt (ScaleType, Option<Mode>) 映射回 sonus ScaleType。
+    pub fn from_rmt(
+        st: rmt::scale::ScaleType,
+        mode: Option<rmt::scale::Mode>,
+    ) -> Self {
+        use rmt::scale::{ScaleType as RS, Mode as RM};
+        match (st, mode) {
+            (RS::Diatonic, Some(RM::Ionian)) => Self::Major,
+            (RS::Diatonic, Some(RM::Dorian)) => Self::Dorian,
+            (RS::Diatonic, Some(RM::Phrygian)) => Self::Phrygian,
+            (RS::Diatonic, Some(RM::Lydian)) => Self::Lydian,
+            (RS::Diatonic, Some(RM::Mixolydian)) => Self::Mixolydian,
+            (RS::Diatonic, Some(RM::Aeolian)) => Self::Minor,
+            (RS::Diatonic, Some(RM::Locrian)) => Self::Locrian,
+            (RS::Diatonic, _) => Self::Major,
+            (RS::HarmonicMinor, _) => Self::HarmonicMinor,
+            (RS::MelodicMinor, _) => Self::MelodicMinor,
+            (RS::PentatonicMajor, _) => Self::MajorPentatonic,
+            (RS::PentatonicMinor, _) => Self::MinorPentatonic,
+            (RS::Blues, _) => Self::Blues,
+            (RS::WholeTone, _) => Self::WholeTone,
+            (RS::Chromatic, _) => Self::Chromatic,
+        }
+    }
+}
+
+impl Scale {
+    /// 通过 rust-music-theory 生成音阶（仅限 rmt 支持的 14 种音阶类型）。
+    pub fn to_rmt_scale(&self, octave: u8) -> Option<rmt::scale::Scale> {
+        let (rmt_st, rmt_mode) = self.scale_type.to_rmt()?;
+        let root_pitch = Pitch::new(self.root, Accidental::Natural, None);
+        let tonic: rmt::note::Pitch = root_pitch.into();
+        rmt::scale::Scale::new(
+            rmt_st,
+            tonic,
+            octave as i16,
+            rmt_mode,
+            self.direction.to_rmt(),
+        )
+        .ok()
+    }
+
+    /// 通过 rmt 生成音阶的实际音符列表（含八度，含方向）。
+    ///
+    /// 仅限 rmt 支持的 14 种音阶类型。返回的每个元素为 `(NoteName, Accidental, octave)`。
+    /// 利用 rmt 的 `KeySignature` 进行调性感知等音拼写。
+    pub fn notes(&self, octave: u8) -> Option<Vec<Pitch>> {
+        use crate::rmt::note::Notes;
+        let rmt_scale = self.to_rmt_scale(octave)?;
+        let rmt_notes = rmt_scale.notes();
+        Some(rmt_notes.into_iter().map(|n| {
+            let rmt_pitch = n.pitch;
+            let octave = n.octave as u8;
+            let mut p = Pitch::from(rmt_pitch);
+            p.octave = Some(octave);
+            p
+        }).collect())
+    }
+
+    /// 通过 rmt 计算音阶的绝对音程（从根音到每个音级的累积半音数）。
+    pub fn absolute_intervals(&self) -> Option<Vec<rmt::interval::Interval>> {
+        let rmt_scale = self.to_rmt_scale(4)?;
+        Some(rmt_scale.absolute_intervals())
     }
 }
 
@@ -414,5 +552,84 @@ mod tests {
         assert!(ScaleType::Major.is_heptatonic());
         assert!(!ScaleType::MajorPentatonic.is_heptatonic());
         assert!(ScaleType::MajorPentatonic.is_pentatonic());
+    }
+
+    #[test]
+    fn test_scale_clone_copy() {
+        let s = Scale::new(NoteName::C, ScaleType::Major);
+        let s2 = s;
+        assert_eq!(s.root, s2.root);
+        assert_eq!(s.scale_type, s2.scale_type);
+    }
+
+    #[test]
+    fn test_scale_display() {
+        let s = Scale::new(NoteName::D, ScaleType::Major);
+        assert!(s.display().starts_with("D Major"));
+        let s2 = Scale::new(NoteName::A, ScaleType::Minor);
+        assert!(s2.display().starts_with("A Natural Minor"));
+    }
+
+    #[test]
+    fn test_scale_eq() {
+        let a = Scale::new(NoteName::C, ScaleType::Major);
+        let b = Scale::new(NoteName::C, ScaleType::Major);
+        let c = Scale::new(NoteName::D, ScaleType::Major);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_all_scale_types() {
+        for st in ScaleType::all().iter() {
+            let _ = Scale::new(NoteName::C, *st);
+        }
+    }
+
+    #[test]
+    fn test_scale_notes_via_rmt() {
+        let s = Scale::new(NoteName::C, ScaleType::Major);
+        let notes = s.notes(4).unwrap();
+        // rmt returns 8 notes (7 scale degrees + octave repeat)
+        assert_eq!(notes.len(), 8);
+        assert_eq!(notes[0].name, NoteName::C);
+        assert_eq!(notes[0].octave, Some(4));
+        assert_eq!(notes[1].name, NoteName::D);
+        assert_eq!(notes[6].name, NoteName::B);
+        assert_eq!(notes[7].name, NoteName::C);
+    }
+
+    #[test]
+    fn test_scale_notes_minor_via_rmt() {
+        let s = Scale::new(NoteName::A, ScaleType::Minor);
+        let notes = s.notes(4).unwrap();
+        assert_eq!(notes.len(), 8);
+        assert_eq!(notes[0].name, NoteName::A);
+    }
+
+    #[test]
+    fn test_scale_notes_exotic_returns_none() {
+        let s = Scale::new(NoteName::C, ScaleType::Hirajoshi);
+        assert!(s.notes(4).is_none());
+    }
+
+    #[test]
+    fn test_scale_absolute_intervals_via_rmt() {
+        let s = Scale::new(NoteName::C, ScaleType::Major);
+        let intervals = s.absolute_intervals().unwrap();
+        // rmt returns intervals for each scale degree
+        assert!(intervals.len() >= 7);
+    }
+
+    #[test]
+    fn test_scale_direction() {
+        let s_asc = Scale::new_with_direction(NoteName::C, ScaleType::Major, ScaleDirection::Ascending);
+        let s_desc = Scale::new_with_direction(NoteName::C, ScaleType::Major, ScaleDirection::Descending);
+        let notes_asc = s_asc.notes(4).unwrap();
+        let notes_desc = s_desc.notes(4).unwrap();
+        // Both should produce the same number of notes
+        assert_eq!(notes_asc.len(), notes_desc.len());
+        // Root should be the same
+        assert_eq!(notes_asc[0].name, notes_desc[0].name);
     }
 }

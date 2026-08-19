@@ -7,7 +7,7 @@
 //! 例：`Cmaj7#5` = root=C, quality=Maj, extension=maj7, alter=#5
 
 use super::quality::ChordQuality;
-use super::super::pitch::Pitch;
+use super::super::pitch::{Accidental, Pitch};
 use super::super::duration::Duration;
 
 // ── 变更类型 ──────────────────────────────────────────────
@@ -185,11 +185,13 @@ impl ChordSymbol {
 
 // ── 和弦实体 ──────────────────────────────────────────────
 
-/// 和弦：符号 + 可选 slash bass + 时值 + 轨道。
+/// 和弦：符号 + 可选 slash bass + 转位 + 时值 + 轨道。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chord {
     pub symbol: ChordSymbol,
     pub slash_bass: Option<Pitch>,
+    /// 转位：0 = 原位，1 = 第一转位，2 = 第二转位 …
+    pub inversion: u8,
     pub duration: Duration,
     pub track_id: usize,
     velocity: u8,
@@ -197,7 +199,7 @@ pub struct Chord {
 
 impl Chord {
     pub fn new_normal(symbol: ChordSymbol, duration: Duration, track_id: usize) -> Self {
-        Self { symbol, slash_bass: None, duration, track_id, velocity: 100 }
+        Self { symbol, slash_bass: None, inversion: 0, duration, track_id, velocity: 100 }
     }
 
     pub fn new_slash(
@@ -206,7 +208,17 @@ impl Chord {
         duration: Duration,
         track_id: usize,
     ) -> Self {
-        Self { symbol, slash_bass: Some(bass), duration, track_id, velocity: 100 }
+        Self { symbol, slash_bass: Some(bass), inversion: 0, duration, track_id, velocity: 100 }
+    }
+
+    /// 创建带转位的和弦。
+    pub fn new_with_inversion(
+        symbol: ChordSymbol,
+        inversion: u8,
+        duration: Duration,
+        track_id: usize,
+    ) -> Self {
+        Self { symbol, slash_bass: None, inversion, duration, track_id, velocity: 100 }
     }
 
     pub fn velocity(&self) -> u8 {
@@ -240,11 +252,149 @@ impl Chord {
 
     pub fn display(&self) -> String {
         let mut buf = format!("[{}", self.symbol.display());
-        if let Some(bass) = &self.slash_bass {
+        if self.inversion > 0 {
+            buf.push_str(&format!("/{}", self.inversion));
+        } else if let Some(bass) = &self.slash_bass {
             buf.push_str(&format!("/{}", bass.display()));
         }
         buf.push_str(&format!("]{}", self.duration.display()));
         buf
+    }
+
+    /// 通过 rust-music-theory 计算和弦的实际音符（含转位、slash bass）。
+    ///
+    /// 利用 rmt 0.4 的 `Chord::from_string` 解析和弦字符串，
+    /// 并通过 `bass` 字段处理 slash chord。
+    pub fn notes(&self, _octave: u8) -> Option<Vec<Pitch>> {
+        use crate::rmt::note::Notes;
+        let mut rmt_chord = self.symbol.to_rmt_chord()?;
+        if self.inversion > 0 {
+            rmt_chord.inversion = self.inversion;
+        }
+        if let Some(ref bass) = self.slash_bass {
+            rmt_chord.bass = Some(rmt::note::Pitch::from(*bass));
+        }
+        let rmt_notes = rmt_chord.notes();
+        Some(rmt_notes.into_iter().map(|n| {
+            let rmt_pitch = n.pitch;
+            Pitch::from(rmt_pitch)
+        }).collect())
+    }
+
+    /// 计算和弦的 MIDI 音符值列表（0-127）。
+    ///
+    /// 返回和弦中所有音符的 MIDI 值。若和弦无法解析则返回 `None`。
+    pub fn to_midi(&self, octave: u8) -> Option<Vec<u8>> {
+        let pitches = self.notes(octave)?;
+        let midis: Vec<u8> = pitches.iter().filter_map(|p| {
+            let mut p_with_oct = *p;
+            if p_with_oct.octave.is_none() {
+                p_with_oct.octave = Some(octave);
+            }
+            p_with_oct.to_midi()
+        }).collect();
+        if midis.is_empty() {
+            None
+        } else {
+            Some(midis)
+        }
+    }
+}
+
+// ── rust-music-theory 互转 ────────────────────────────────
+
+use crate::rmt;
+
+impl ChordSymbol {
+    /// 转换为 rmt::chord::Chord — 优先使用 `Chord::from_string`。
+    ///
+    /// 构建 lead-sheet 字符串（如 "Cmaj7"、"Bbm"、"Gdim"），
+    /// 委托 rmt 解析并计算音程。若 `from_string` 失败则回退到手动构建。
+    ///
+    /// alterations 不参与转换（rmt 不支持）。
+    pub fn to_rmt_chord(&self) -> Option<rmt::chord::Chord> {
+        let quality = self.quality?;
+
+        // 构建 lead-sheet 字符串供 Chord::from_string 解析
+        let s = self.to_rmt_string(quality);
+        if let Ok(chord) = rmt::chord::Chord::from_string(&s) {
+            // 验证 from_string 解析的品质与期望一致
+            // （rmt 的 from_string 对 "7" 等后缀的默认品质可能不符预期）
+            let expected_quality: rmt::chord::Quality = match (quality, self.base_number) {
+                (ChordQuality::Dom, _) => rmt::chord::Quality::Dominant,
+                _ => quality.into(),
+            };
+            if chord.quality == expected_quality {
+                return Some(chord);
+            }
+        }
+
+        // 回退：手动构建
+        let rmt_pitch: rmt::note::Pitch = self.root.into();
+        let rmt_quality = match (quality, self.base_number) {
+            (ChordQuality::Dom, Some(7)) => rmt::chord::Quality::Dominant,
+            (ChordQuality::Dom, Some(9)) => rmt::chord::Quality::Dominant,
+            (ChordQuality::Dom, Some(11)) => rmt::chord::Quality::Dominant,
+            (ChordQuality::Dom, Some(13)) => rmt::chord::Quality::Dominant,
+            _ => quality.into(),
+        };
+        let number = self.to_rmt_number();
+        Some(rmt::chord::Chord::new(rmt_pitch, rmt_quality, number))
+    }
+
+    /// 构建 rmt 可解析的 lead-sheet 字符串。
+    fn to_rmt_string(&self, quality: ChordQuality) -> String {
+        let mut s = String::new();
+
+        // 根音
+        s.push(self.root.name.as_char());
+        match self.root.acc {
+            Accidental::Sharp => s.push('#'),
+            Accidental::Flat => s.push('b'),
+            Accidental::DoubleSharp => s.push_str("##"),
+            Accidental::DoubleFlat => s.push_str("bb"),
+            Accidental::Natural => {}
+        }
+
+        // 品质
+        match quality {
+            ChordQuality::Min => s.push('m'),
+            ChordQuality::Dim => s.push_str("dim"),
+            ChordQuality::Aug => s.push_str("aug"),
+            ChordQuality::Sus2 => s.push_str("sus2"),
+            ChordQuality::Sus4 => s.push_str("sus4"),
+            ChordQuality::HalfDim => s.push_str("m7b5"),
+            ChordQuality::Dom => {} // 默认，由 extension 决定
+            ChordQuality::Maj | ChordQuality::Power => {} // 默认
+        }
+
+        // 扩展
+        match self.base_number {
+            Some(7) if self.major_seventh => s.push_str("maj7"),
+            Some(7) => s.push('7'),
+            Some(9) if self.major_seventh => s.push_str("maj9"),
+            Some(9) => s.push('9'),
+            Some(11) => s.push_str("11"),
+            Some(13) => s.push_str("13"),
+            _ => {}
+        }
+
+        s
+    }
+
+    /// 将 base_number 映射为 rmt::chord::Number。
+    fn to_rmt_number(&self) -> rmt::chord::Number {
+        match self.base_number {
+            None => rmt::chord::Number::Triad,
+            Some(6) => rmt::chord::Number::Triad,
+            Some(7) if self.major_seventh => rmt::chord::Number::MajorSeventh,
+            Some(7) => rmt::chord::Number::Seventh,
+            Some(9) if self.major_seventh => rmt::chord::Number::Ninth,
+            Some(9) => rmt::chord::Number::Ninth,
+            Some(11) => rmt::chord::Number::Eleventh,
+            Some(13) => rmt::chord::Number::Thirteenth,
+            _ => rmt::chord::Number::Triad,
+        }
     }
 }
 
@@ -430,5 +580,135 @@ mod tests {
         let mut chord = Chord::new_normal(sym, Duration::quarter(), 0);
         chord.transpose(2);
         assert_eq!(chord.symbol.root, pitch(NoteName::D, Accidental::Natural));
+    }
+
+    #[test]
+    fn test_chord_notes_via_rmt() {
+        let sym = ChordSymbol::new(pitch(NoteName::C, Accidental::Natural))
+            .with_quality(ChordQuality::Maj);
+        let chord = Chord::new_normal(sym, Duration::quarter(), 0);
+        let notes = chord.notes(4).unwrap();
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0].name, NoteName::C);
+        assert_eq!(notes[1].name, NoteName::E);
+        assert_eq!(notes[2].name, NoteName::G);
+    }
+
+    #[test]
+    fn test_chord_notes_with_inversion() {
+        let sym = ChordSymbol::new(pitch(NoteName::C, Accidental::Natural))
+            .with_quality(ChordQuality::Maj);
+        let chord = Chord::new_with_inversion(sym, 1, Duration::quarter(), 0);
+        let notes = chord.notes(4).unwrap();
+        assert_eq!(notes.len(), 3);
+        // First inversion: E should be the lowest note
+        assert_eq!(notes[0].name, NoteName::E);
+    }
+
+    #[test]
+    fn test_chord_notes_minor() {
+        let sym = ChordSymbol::new(pitch(NoteName::A, Accidental::Natural))
+            .with_quality(ChordQuality::Min);
+        let chord = Chord::new_normal(sym, Duration::quarter(), 0);
+        let notes = chord.notes(4).unwrap();
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0].name, NoteName::A);
+        assert_eq!(notes[1].name, NoteName::C);
+        assert_eq!(notes[2].name, NoteName::E);
+    }
+
+    // ── Chord::from_string 路径验证 ──
+
+    #[test]
+    fn test_from_string_major_triad() {
+        let sym = ChordSymbol::new(pitch(NoteName::C, Accidental::Natural))
+            .with_quality(ChordQuality::Maj);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Major);
+        assert_eq!(rmt_chord.number, rmt::chord::Number::Triad);
+    }
+
+    #[test]
+    fn test_from_string_minor_7th() {
+        let sym = ChordSymbol::new(pitch(NoteName::A, Accidental::Natural))
+            .with_quality(ChordQuality::Min)
+            .with_extension(7, false);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Minor);
+        assert_eq!(rmt_chord.number, rmt::chord::Number::Seventh);
+    }
+
+    #[test]
+    fn test_from_string_dominant_7th() {
+        let sym = ChordSymbol::new(pitch(NoteName::G, Accidental::Natural))
+            .with_quality(ChordQuality::Dom)
+            .with_extension(7, false);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Dominant);
+        assert_eq!(rmt_chord.number, rmt::chord::Number::Seventh);
+    }
+
+    #[test]
+    fn test_from_string_major_7th() {
+        let sym = ChordSymbol::new(pitch(NoteName::C, Accidental::Natural))
+            .with_quality(ChordQuality::Maj)
+            .with_extension(7, true);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Major);
+        assert_eq!(rmt_chord.number, rmt::chord::Number::MajorSeventh);
+    }
+
+    #[test]
+    fn test_from_string_dim() {
+        let sym = ChordSymbol::new(pitch(NoteName::B, Accidental::Natural))
+            .with_quality(ChordQuality::Dim);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Diminished);
+    }
+
+    #[test]
+    fn test_from_string_halfdim() {
+        let sym = ChordSymbol::new(pitch(NoteName::B, Accidental::Natural))
+            .with_quality(ChordQuality::HalfDim)
+            .with_extension(7, false);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::HalfDiminished);
+        assert_eq!(rmt_chord.number, rmt::chord::Number::Seventh);
+    }
+
+    #[test]
+    fn test_from_string_sus4() {
+        let sym = ChordSymbol::new(pitch(NoteName::G, Accidental::Natural))
+            .with_quality(ChordQuality::Sus4);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Suspended4);
+    }
+
+    #[test]
+    fn test_from_string_flat_root() {
+        let sym = ChordSymbol::new(pitch(NoteName::B, Accidental::Flat))
+            .with_quality(ChordQuality::Maj);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.root.letter, rmt::note::NoteLetter::B);
+        assert_eq!(rmt_chord.root.accidental, -1);
+    }
+
+    #[test]
+    fn test_from_string_sharp_root() {
+        let sym = ChordSymbol::new(pitch(NoteName::F, Accidental::Sharp))
+            .with_quality(ChordQuality::Min);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.root.letter, rmt::note::NoteLetter::F);
+        assert_eq!(rmt_chord.root.accidental, 1);
+    }
+
+    #[test]
+    fn test_from_string_9th() {
+        let sym = ChordSymbol::new(pitch(NoteName::C, Accidental::Natural))
+            .with_quality(ChordQuality::Dom)
+            .with_extension(9, false);
+        let rmt_chord = sym.to_rmt_chord().unwrap();
+        assert_eq!(rmt_chord.quality, rmt::chord::Quality::Dominant);
+        assert_eq!(rmt_chord.number, rmt::chord::Number::Ninth);
     }
 }

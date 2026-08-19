@@ -1,4 +1,4 @@
-﻿//! 乐器种类 — 纯领域枚举，无 MIDI 程序号 / CC 映射。
+//! 乐器种类 — 纯领域枚举，无 MIDI 程序号 / CC 映射。
 //!
 //! 128 种乐器覆盖 General MIDI 标准音色集，按族分组。
 
@@ -472,5 +472,55 @@ mod tests {
     fn test_display_name() {
         assert_eq!(InstrumentKind::AcousticPiano.display_name(), "Acoustic Grand Piano");
         assert_eq!(InstrumentKind::Trumpet.display_name(), "Trumpet");
+    }
+
+    #[test]
+    fn test_family_coverage() {
+        assert_eq!(InstrumentKind::SynthDrum.family(), InstrumentFamily::Percussive);
+        assert_eq!(InstrumentKind::MelodicTom.family(), InstrumentFamily::Percussive);
+        assert_eq!(InstrumentKind::Gunshot.family(), InstrumentFamily::SoundEffects);
+        assert_eq!(InstrumentKind::Celesta.family(), InstrumentFamily::ChromaticPercussion);
+        assert_eq!(InstrumentKind::Harpsichord.family(), InstrumentFamily::Piano);
+        assert_eq!(InstrumentKind::Contrabass.family(), InstrumentFamily::Strings);
+        assert_eq!(InstrumentKind::FrenchHorn.family(), InstrumentFamily::Brass);
+    }
+
+    #[test]
+    fn test_index_boundary() {
+        let first = InstrumentKind::from_index(0);
+        assert_eq!(first, InstrumentKind::AcousticPiano);
+        let last = InstrumentKind::from_index(127);
+        assert_eq!(last, InstrumentKind::Gunshot);
+    }
+
+    #[test]
+    fn test_from_str_known() {
+        assert!(InstrumentKind::from_str("piano").is_some());
+        assert!(InstrumentKind::from_str("violin").is_some());
+        assert!(InstrumentKind::from_str("cello").is_some());
+        assert!(InstrumentKind::from_str("trumpet").is_some());
+        assert!(InstrumentKind::from_str("bass").is_some());
+    }
+
+    #[test]
+    fn test_from_str_unknown() {
+        assert!(InstrumentKind::from_str("").is_none());
+        assert!(InstrumentKind::from_str("xyz").is_none());
+        assert!(InstrumentKind::from_str("PIANO").is_none());
+    }
+
+    #[test]
+    fn test_as_str_consistency() {
+        let kinds = [
+            InstrumentKind::AcousticGuitarNylon,
+            InstrumentKind::Violin,
+            InstrumentKind::Trumpet,
+            InstrumentKind::ElectricGuitarClean,
+            InstrumentKind::Gunshot,
+        ];
+        for k in &kinds {
+            let s = k.as_str();
+            assert!(InstrumentKind::from_str(s).is_some(), "from_str({}) failed", s);
+        }
     }
 }

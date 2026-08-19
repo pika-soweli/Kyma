@@ -6,6 +6,8 @@ description = "toki-musi compiler — .tm to .bm (Bin Musi IR)"
 
 [dependencies]
 sonus = { path = "../sonus" }
+rust-music-theory = "0.4"
+perform = { path = "../perform" }
 
 [[bin]]
 name = "opus"

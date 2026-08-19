@@ -1,12 +1,15 @@
-//! 二进制中间表示 (Bin Musi IR) — 编码器 / 解码器。
+//! 二进制中间表示 (Bin Musi IR) — 编码器。
 //!
-//! ## .bm 格式 v1
+//! 将 `sonus::Score` 编码为 `.bm` 二进制格式。
+//! 播放由 `perform` 模块直接读取 `.bm` 文件完成。
+//!
+//! ## .bm 格式 v2
 //!
 //! ```text
 //! Header:
 //!   magic: [u8; 4] = b"BMIR"
-//!   version: u16 LE = 1
-//!   flags: u8  (bit0=title, bit1=key, bit2=tempo, bit3=time)
+//!   version: u16 LE = 2
+//!   flags: u8  (bit0=title, bit1=key, bit2=tempo, bit3=time, bit4=default_dur)
 //!   [title]     string
 //!   [global_key]  Key
 //!   [global_tempo] u16 LE
@@ -16,17 +19,22 @@
 //! Track:  name(string) has_inst(u8) [inst(u8)] section_count(u16) [Section]*
 //! Section: name(string) repeat(u8) measure_count(u16) [Measure]*
 //! Measure: event_count(u16) [Event]*
-//! Event:   tag(u8) [Note|Rest|Chord]
+//! Event:   tag(u8) [Note|Rest|Chord|Control|Tuplet|Grace]
 //!
-//! Pitch:  note_name(u8) accidental(u8) has_octave(u8) [octave(u8)]
+//! Note:   midi(u8) duration(base:u16, dotted:u8) velocity(u8)
+//! Rest:   duration(base:u16, dotted:u8)
+//! Chord:  midi_count(u8) [midi(u8)]* duration(base:u16, dotted:u8) velocity(u8)
+//! Grace:  midi(u8) duration(base:u16, dotted:u8) velocity(u8)
+//!
 //! Key:    root(Pitch) scale_type(u8)
+//! Pitch:  note_name(u8) accidental(u8) has_octave(u8) [octave(u8)]
 //! string: len(u16 LE) + UTF-8 bytes
 //! ```
 
 use sonus::{
-    Accidental, AlterType, Chord, ChordAlterItem, ChordQuality, ChordSymbol,
-    Duration, InstrumentKind, Key, Measure, MeasureEvent, Note, NoteKind,
-    NoteName, Pitch, ScaleType, Score, Section, Tempo, TimeSig, Track,
+    Accidental, Chord, Duration, Key,
+    LocalControl, Measure, MeasureEvent, PedalKind, Pitch, ScaleType, Score,
+    Section, Track,
 };
 
 // ── 枚举 ↔ u8 转换 ────────────────────────────────────────
@@ -50,10 +58,6 @@ fn scale_to_u8(st: ScaleType) -> u8 {
     ALL_SCALE_TYPES.iter().position(|&s| s == st).unwrap() as u8
 }
 
-fn u8_to_scale(v: u8) -> ScaleType {
-    ALL_SCALE_TYPES[(v as usize) % 30]
-}
-
 fn acc_to_u8(a: Accidental) -> u8 {
     match a {
         Accidental::Natural => 0,
@@ -64,55 +68,11 @@ fn acc_to_u8(a: Accidental) -> u8 {
     }
 }
 
-fn u8_to_acc(v: u8) -> Accidental {
-    match v % 5 {
-        0 => Accidental::Natural,
-        1 => Accidental::Sharp,
-        2 => Accidental::DoubleSharp,
-        3 => Accidental::Flat,
-        _ => Accidental::DoubleFlat,
-    }
-}
-
-fn quality_to_u8(q: ChordQuality) -> u8 {
-    match q {
-        ChordQuality::Maj => 0,
-        ChordQuality::Min => 1,
-        ChordQuality::Dim => 2,
-        ChordQuality::Aug => 3,
-        ChordQuality::Sus2 => 4,
-        ChordQuality::Sus4 => 5,
-        ChordQuality::Power => 6,
-    }
-}
-
-fn u8_to_quality(v: u8) -> ChordQuality {
-    match v % 7 {
-        0 => ChordQuality::Maj,
-        1 => ChordQuality::Min,
-        2 => ChordQuality::Dim,
-        3 => ChordQuality::Aug,
-        4 => ChordQuality::Sus2,
-        5 => ChordQuality::Sus4,
-        _ => ChordQuality::Power,
-    }
-}
-
-fn alter_to_u8(a: AlterType) -> u8 {
-    match a {
-        AlterType::Sharp => 0,
-        AlterType::Flat => 1,
-        AlterType::Add => 2,
-        AlterType::No => 3,
-    }
-}
-
-fn u8_to_alter(v: u8) -> AlterType {
-    match v % 4 {
-        0 => AlterType::Sharp,
-        1 => AlterType::Flat,
-        2 => AlterType::Add,
-        _ => AlterType::No,
+fn pedal_to_u8(p: PedalKind) -> u8 {
+    match p {
+        PedalKind::Sustain => 0,
+        PedalKind::Soft => 1,
+        PedalKind::Sostenuto => 2,
     }
 }
 
@@ -168,113 +128,18 @@ impl Writer {
     }
 }
 
-// ── 二进制读取器 ──────────────────────────────────────────
-
-struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
-    }
-
-    fn u8(&mut self) -> Result<u8, IrError> {
-        if self.pos >= self.buf.len() {
-            return Err(IrError::UnexpectedEof);
-        }
-        let v = self.buf[self.pos];
-        self.pos += 1;
-        Ok(v)
-    }
-
-    fn u16(&mut self) -> Result<u16, IrError> {
-        if self.pos + 2 > self.buf.len() {
-            return Err(IrError::UnexpectedEof);
-        }
-        let v = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
-        self.pos += 2;
-        Ok(v)
-    }
-
-    fn string(&mut self) -> Result<String, IrError> {
-        let len = self.u16()? as usize;
-        if self.pos + len > self.buf.len() {
-            return Err(IrError::UnexpectedEof);
-        }
-        let s = std::str::from_utf8(&self.buf[self.pos..self.pos + len])
-            .map_err(|_| IrError::InvalidUtf8)?
-            .to_string();
-        self.pos += len;
-        Ok(s)
-    }
-
-    fn pitch(&mut self) -> Result<Pitch, IrError> {
-        let name = NoteName::from_index(self.u8()?);
-        let acc = u8_to_acc(self.u8()?);
-        let has_oct = self.u8()?;
-        let octave = if has_oct != 0 {
-            Some(self.u8()?)
-        } else {
-            None
-        };
-        Ok(Pitch::new(name, acc, octave))
-    }
-
-    fn key(&mut self) -> Result<Key, IrError> {
-        let root = self.pitch()?;
-        let st = u8_to_scale(self.u8()?);
-        Ok(Key::new(root, st))
-    }
-
-    fn duration(&mut self) -> Result<Duration, IrError> {
-        let base = self.u16()? as u32;
-        let dotted = self.u8()? != 0;
-        Ok(Duration::new(base, dotted))
-    }
-}
-
-/// IR 错误。
-#[derive(Debug, Clone)]
-pub enum IrError {
-    BadMagic,
-    UnsupportedVersion(u16),
-    UnexpectedEof,
-    InvalidUtf8,
-    BadEventTag(u8),
-}
-
-impl std::fmt::Display for IrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BadMagic => write!(f, "bad magic bytes"),
-            Self::UnsupportedVersion(v) => write!(f, "unsupported version: {}", v),
-            Self::UnexpectedEof => write!(f, "unexpected end of data"),
-            Self::InvalidUtf8 => write!(f, "invalid UTF-8"),
-            Self::BadEventTag(t) => write!(f, "bad event tag: {}", t),
-        }
-    }
-}
-
-impl std::error::Error for IrError {}
-
 // ── 公共 API ──────────────────────────────────────────────
 
-/// 魔数。
 const MAGIC: &[u8; 4] = b"BMIR";
-/// 当前版本。
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 /// 将 Score 编码为 .bm 二进制。
 pub fn encode(score: &Score) -> Vec<u8> {
     let mut w = Writer::new();
 
-    // Header
     w.buf.extend_from_slice(MAGIC);
     w.u16(VERSION);
 
-    // Flags
     let mut flags: u8 = 0;
     if score.title.is_some() {
         flags |= 1;
@@ -288,9 +153,11 @@ pub fn encode(score: &Score) -> Vec<u8> {
     if score.global_time.is_some() {
         flags |= 8;
     }
+    if score.default_duration != Duration::quarter() {
+        flags |= 16;
+    }
     w.u8(flags);
 
-    // Optional fields
     if let Some(ref title) = score.title {
         w.string(title);
     }
@@ -304,8 +171,11 @@ pub fn encode(score: &Score) -> Vec<u8> {
         w.u8(time.beats_per_bar as u8);
         w.u8(time.beat_value as u8);
     }
+    if flags & 16 != 0 {
+        w.u8(score.default_duration.base as u8);
+        w.u8(if score.default_duration.dotted { 1 } else { 0 });
+    }
 
-    // Tracks
     w.u16(score.tracks.len() as u16);
     for track in &score.tracks {
         encode_track(&mut w, track);
@@ -351,279 +221,108 @@ fn encode_event(w: &mut Writer, event: &MeasureEvent) {
     match event {
         MeasureEvent::Note(note) => {
             if note.is_rest() {
-                w.u8(1); // Rest
+                w.u8(1);
                 w.duration(&note.duration);
             } else {
-                w.u8(0); // Note
-                if let NoteKind::Normal(pitch) = &note.kind {
-                    w.pitch(pitch);
-                }
+                w.u8(0);
+                let midi = note.to_midi().unwrap_or(60);
+                w.u8(midi);
                 w.duration(&note.duration);
                 w.u8(note.velocity());
             }
         }
         MeasureEvent::Chord(chord) => {
-            w.u8(2); // Chord
+            w.u8(2);
             encode_chord(w, chord);
         }
-        MeasureEvent::Control(_) => {
-            // Cycle 0: 控制事件暂不编码
+        MeasureEvent::Control(ctrl) => {
             w.u8(3);
+            encode_control(w, ctrl);
+        }
+        MeasureEvent::Tuplet(tuplet) => {
+            w.u8(4);
+            w.u8(tuplet.ratio.0 as u8);
+            w.u8(tuplet.ratio.1 as u8);
+            w.u16(tuplet.events.len() as u16);
+            for e in &tuplet.events {
+                encode_event(w, e);
+            }
+        }
+        MeasureEvent::Grace(note) => {
+            w.u8(5);
+            let midi = note.to_midi().unwrap_or(60);
+            w.u8(midi);
+            w.duration(&note.duration);
+            w.u8(note.velocity());
+        }
+    }
+}
+
+fn encode_control(w: &mut Writer, ctrl: &LocalControl) {
+    match ctrl {
+        LocalControl::LocalKey(k) => {
+            w.u8(0);
+            w.key(k);
+        }
+        LocalControl::LocalTempo(t) => {
+            w.u8(1);
+            w.u16(t.bpm());
+        }
+        LocalControl::LocalTime(ts) => {
+            w.u8(2);
+            w.u8(ts.beats_per_bar as u8);
+            w.u8(ts.beat_value as u8);
+        }
+        LocalControl::PedalOn(p) => {
+            w.u8(3);
+            w.u8(pedal_to_u8(*p));
+        }
+        LocalControl::PedalOff(p) => {
+            w.u8(4);
+            w.u8(pedal_to_u8(*p));
+        }
+        LocalControl::Volume(v) => {
+            w.u8(5);
+            w.u8(*v);
+        }
+        LocalControl::DynamicMark(s) => {
+            w.u8(6);
+            w.string(s);
         }
     }
 }
 
 fn encode_chord(w: &mut Writer, chord: &Chord) {
-    // Root pitch
-    w.pitch(&chord.symbol.root);
-
-    // Quality
-    match &chord.symbol.quality {
-        Some(q) => {
-            w.u8(1);
-            w.u8(quality_to_u8(*q));
-        }
-        None => w.u8(0),
+    let midis = chord.to_midi(4).unwrap_or_else(|| vec![60]);
+    w.u8(midis.len() as u8);
+    for midi in &midis {
+        w.u8(*midi);
     }
-
-    // Extension
-    match chord.symbol.base_number {
-        Some(n) => {
-            w.u8(1);
-            w.u8(n as u8);
-        }
-        None => w.u8(0),
-    }
-
-    // Major seventh
-    w.u8(if chord.symbol.major_seventh { 1 } else { 0 });
-
-    // Slash bass
-    match &chord.slash_bass {
-        Some(bass) => {
-            w.u8(1);
-            w.pitch(bass);
-        }
-        None => w.u8(0),
-    }
-
-    // Alters
-    w.u8(chord.symbol.alters.len() as u8);
-    for alter in &chord.symbol.alters {
-        w.u8(alter_to_u8(alter.alter_type));
-        w.u8(alter.number as u8);
-    }
-
-    // Duration & velocity
     w.duration(&chord.duration);
     w.u8(chord.velocity());
-}
-
-/// 从 .bm 二进制解码为 Score。
-pub fn decode(bytes: &[u8]) -> Result<Score, IrError> {
-    let mut r = Reader::new(bytes);
-
-    // Magic
-    if bytes.len() < 6 {
-        return Err(IrError::UnexpectedEof);
-    }
-    if &bytes[0..4] != MAGIC {
-        return Err(IrError::BadMagic);
-    }
-    r.pos = 4;
-
-    let version = r.u16()?;
-    if version != VERSION {
-        return Err(IrError::UnsupportedVersion(version));
-    }
-
-    let flags = r.u8()?;
-    let mut score = Score::empty();
-
-    if flags & 1 != 0 {
-        score.set_title(r.string()?);
-    }
-    if flags & 2 != 0 {
-        score.set_global_key(r.key()?);
-    }
-    if flags & 4 != 0 {
-        score.set_global_tempo(Tempo::new(r.u16()?));
-    }
-    if flags & 8 != 0 {
-        let beats = r.u8()? as u32;
-        let beat_value = r.u8()? as u32;
-        score.set_global_time(TimeSig::new(beats, beat_value));
-    }
-
-    let track_count = r.u16()?;
-    for i in 0..track_count as usize {
-        let track = decode_track(&mut r, i)?;
-        score.push_track(track);
-    }
-
-    Ok(score)
-}
-
-fn decode_track(r: &mut Reader, track_id: usize) -> Result<Track, IrError> {
-    let name = r.string()?;
-    let mut track = Track::new(name, track_id);
-
-    let has_inst = r.u8()?;
-    if has_inst != 0 {
-        let idx = r.u8()?;
-        track.set_instrument(InstrumentKind::from_index(idx));
-    }
-
-    let section_count = r.u16()?;
-    for _ in 0..section_count {
-        track.push_section(decode_section(r)?);
-    }
-
-    Ok(track)
-}
-
-fn decode_section(r: &mut Reader) -> Result<Section, IrError> {
-    let name = r.string()?;
-    let mut section = Section::new(name);
-
-    let repeat = r.u8()?;
-    if repeat > 0 {
-        section.set_repeat(repeat as u32);
-    }
-
-    let measure_count = r.u16()?;
-    for i in 0..measure_count as u32 {
-        section.push_measure(decode_measure(r, i)?);
-    }
-
-    Ok(section)
-}
-
-fn decode_measure(r: &mut Reader, index: u32) -> Result<Measure, IrError> {
-    let mut measure = Measure::new(index);
-    let event_count = r.u16()?;
-    for _ in 0..event_count {
-        let tag = r.u8()?;
-        match tag {
-            0 => {
-                // Note
-                let pitch = r.pitch()?;
-                let duration = r.duration()?;
-                let velocity = r.u8()?;
-                let mut note = Note::new_note(pitch, duration, 0);
-                note.set_velocity(velocity);
-                measure.push_event(MeasureEvent::Note(note));
-            }
-            1 => {
-                // Rest
-                let duration = r.duration()?;
-                measure.push_event(MeasureEvent::Note(Note::new_rest(duration, 0)));
-            }
-            2 => {
-                // Chord
-                let chord = decode_chord(r)?;
-                measure.push_event(MeasureEvent::Chord(chord));
-            }
-            3 => {
-                // Control — Cycle 0 跳过
-            }
-            _ => return Err(IrError::BadEventTag(tag)),
-        }
-    }
-    Ok(measure)
-}
-
-fn decode_chord(r: &mut Reader) -> Result<Chord, IrError> {
-    let root = r.pitch()?;
-
-    let has_quality = r.u8()?;
-    let quality = if has_quality != 0 {
-        Some(u8_to_quality(r.u8()?))
-    } else {
-        None
-    };
-
-    let has_extension = r.u8()?;
-    let extension = if has_extension != 0 {
-        Some(r.u8()? as u32)
-    } else {
-        None
-    };
-
-    let major_seventh = r.u8()? != 0;
-
-    let has_slash = r.u8()?;
-    let slash_bass = if has_slash != 0 {
-        Some(r.pitch()?)
-    } else {
-        None
-    };
-
-    let alter_count = r.u8()?;
-    let mut alters = Vec::with_capacity(alter_count as usize);
-    for _ in 0..alter_count {
-        let alter_type = u8_to_alter(r.u8()?);
-        let number = r.u8()? as u32;
-        alters.push(ChordAlterItem { alter_type, number });
-    }
-
-    let duration = r.duration()?;
-    let velocity = r.u8()?;
-
-    let mut symbol = ChordSymbol::new(root);
-    if let Some(q) = quality {
-        symbol = symbol.with_quality(q);
-    }
-    if let Some(ext) = extension {
-        symbol = symbol.with_extension(ext, major_seventh);
-    }
-    symbol.alters = alters;
-
-    let mut chord = match slash_bass {
-        Some(bass) => Chord::new_slash(symbol, bass, duration, 0),
-        None => Chord::new_normal(symbol, duration, 0),
-    };
-    chord.set_velocity(velocity);
-
-    Ok(chord)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonus::{NoteName, Accidental, Pitch};
+    use sonus::{
+        ChordQuality, ChordSymbol, InstrumentKind, Note, NoteName,
+        Tempo, Tuplet,
+    };
+    use perform::reader;
+    use perform::PerfEvent;
 
-    fn roundtrip(score: &Score) -> Score {
+    fn encode_and_read(score: &Score) -> perform::PerformScore {
         let bytes = encode(score);
-        decode(&bytes).unwrap()
+        reader::read(&bytes).unwrap()
     }
 
     #[test]
-    fn test_empty_score() {
-        let score = Score::empty();
-        let decoded = roundtrip(&score);
-        assert_eq!(decoded.title, None);
-        assert_eq!(decoded.tracks.len(), 0);
-    }
-
-    #[test]
-    fn test_headers() {
+    fn test_encode_read_notes() {
         let mut score = Score::empty();
-        score.set_title("Test Song".into());
-        score.set_global_key(Key::major(Pitch::new(NoteName::C, Accidental::Natural, None)));
-        score.set_global_tempo(Tempo::new(140));
-        score.set_global_time(TimeSig::new(3, 4));
+        score.set_title("Test".into());
+        score.set_global_tempo(Tempo::new(120));
 
-        let decoded = roundtrip(&score);
-        assert_eq!(decoded.title, Some("Test Song".into()));
-        assert!(decoded.global_key.is_some());
-        assert_eq!(decoded.global_bpm(), 140);
-        assert_eq!(decoded.global_time.unwrap().beats_per_bar, 3);
-    }
-
-    #[test]
-    fn test_notes() {
-        let mut score = Score::empty();
         let mut track = Track::new("piano".into(), 0);
         track.set_instrument(InstrumentKind::AcousticPiano);
         let mut section = Section::new("A".into());
@@ -634,8 +333,8 @@ mod tests {
             0,
         )));
         m.push_event(MeasureEvent::Note(Note::new_note(
-            Pitch::new(NoteName::F, Accidental::Sharp, Some(5)),
-            Duration::dotted_eighth(),
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            Duration::quarter(),
             0,
         )));
         m.push_event(MeasureEvent::Note(Note::new_rest(Duration::half(), 0)));
@@ -643,118 +342,116 @@ mod tests {
         track.push_section(section);
         score.push_track(track);
 
-        let decoded = roundtrip(&score);
-        assert_eq!(decoded.tracks.len(), 1);
-        let t = &decoded.tracks[0];
-        assert_eq!(t.name, "piano");
-        assert!(t.instrument.is_some());
-        assert_eq!(t.sections[0].measures[0].events.len(), 3);
+        let perf = encode_and_read(&score);
+        assert_eq!(perf.title, Some("Test".into()));
+        assert_eq!(perf.global_tempo, 120);
+        assert_eq!(perf.tracks.len(), 1);
+        assert_eq!(perf.tracks[0].instrument, Some(0));
 
-        // Check first note
-        if let MeasureEvent::Note(n) = &t.sections[0].measures[0].events[0] {
-            assert_eq!(n.pitch().unwrap().name, NoteName::C);
-            assert_eq!(n.pitch().unwrap().octave, Some(4));
-            assert_eq!(n.duration, Duration::quarter());
-        } else {
-            panic!("expected note");
+        let events = &perf.tracks[0].sections[0].measures[0].events;
+        assert_eq!(events.len(), 3);
+        match &events[0] {
+            PerfEvent::Note { midi, velocity, .. } => {
+                assert_eq!(*midi, 60);
+                assert_eq!(*velocity, 100);
+            }
+            _ => panic!("expected Note"),
         }
-
-        // Check second note (F#5 dotted eighth)
-        if let MeasureEvent::Note(n) = &t.sections[0].measures[0].events[1] {
-            assert_eq!(n.pitch().unwrap().name, NoteName::F);
-            assert_eq!(n.pitch().unwrap().acc, Accidental::Sharp);
-            assert_eq!(n.pitch().unwrap().octave, Some(5));
-            assert!(n.duration.dotted);
-            assert_eq!(n.duration.base, 8);
-        } else {
-            panic!("expected note");
+        match &events[1] {
+            PerfEvent::Note { midi, .. } => assert_eq!(*midi, 64),
+            _ => panic!("expected Note"),
         }
-
-        // Check rest
-        if let MeasureEvent::Note(n) = &t.sections[0].measures[0].events[2] {
-            assert!(n.is_rest());
-            assert_eq!(n.duration, Duration::half());
-        } else {
-            panic!("expected rest");
-        }
+        assert!(matches!(&events[2], PerfEvent::Rest { .. }));
     }
 
     #[test]
-    fn test_chord() {
+    fn test_encode_read_chord() {
         let mut score = Score::empty();
-        let mut track = Track::new("guitar".into(), 0);
-        let mut section = Section::new("V".into());
+        let mut track = Track::new("t".into(), 0);
+        let mut section = Section::new("A".into());
+        let mut m = Measure::new(0);
 
         let sym = ChordSymbol::new(Pitch::new(NoteName::C, Accidental::Natural, None))
-            .with_quality(ChordQuality::Maj)
-            .with_extension(7, true);
-        let chord = Chord::new_normal(sym, Duration::quarter(), 0);
-        let mut m = Measure::new(0);
-        m.push_event(MeasureEvent::Chord(chord));
+            .with_quality(ChordQuality::Maj);
+        m.push_event(MeasureEvent::Chord(Chord::new_normal(sym, Duration::whole(), 0)));
         section.push_measure(m);
         track.push_section(section);
         score.push_track(track);
 
-        let decoded = roundtrip(&score);
-        let t = &decoded.tracks[0];
-        if let MeasureEvent::Chord(c) = &t.sections[0].measures[0].events[0] {
-            assert_eq!(c.symbol.root.name, NoteName::C);
-            assert_eq!(c.symbol.quality, Some(ChordQuality::Maj));
-            assert_eq!(c.symbol.base_number, Some(7));
-            assert!(c.symbol.major_seventh);
-        } else {
-            panic!("expected chord");
+        let perf = encode_and_read(&score);
+        match &perf.tracks[0].sections[0].measures[0].events[0] {
+            PerfEvent::Chord { midis, .. } => {
+                assert!(!midis.is_empty());
+                assert_eq!(midis[0], 60);
+            }
+            _ => panic!("expected Chord"),
         }
     }
 
     #[test]
-    fn test_section_repeat() {
+    fn test_encode_read_control() {
         let mut score = Score::empty();
         let mut track = Track::new("t".into(), 0);
-        let mut section = Section::new("B".into());
-        section.set_repeat(3);
-        section.push_measure(Measure::new(0));
+        let mut section = Section::new("A".into());
+        let mut m = Measure::new(0);
+
+        m.push_event(MeasureEvent::Control(LocalControl::LocalTempo(Tempo::new(140))));
+        m.push_event(MeasureEvent::Control(LocalControl::PedalOn(PedalKind::Sustain)));
+        m.push_event(MeasureEvent::Control(LocalControl::Volume(80)));
+        section.push_measure(m);
         track.push_section(section);
         score.push_track(track);
 
-        let decoded = roundtrip(&score);
-        assert_eq!(decoded.tracks[0].sections[0].repeat_times, Some(3));
+        let perf = encode_and_read(&score);
+        let events = &perf.tracks[0].sections[0].measures[0].events;
+        assert_eq!(events.len(), 3);
+        assert!(matches!(&events[0], PerfEvent::Control(perform::PerfControl::Tempo(140))));
+        assert!(matches!(&events[1], PerfEvent::Control(perform::PerfControl::PedalOn(0))));
+        assert!(matches!(&events[2], PerfEvent::Control(perform::PerfControl::Volume(80))));
     }
 
     #[test]
-    fn test_bad_magic() {
-        let result = decode(b"XXXX\x01\x00\x00");
-        assert!(matches!(result, Err(IrError::BadMagic)));
-    }
-
-    #[test]
-    fn test_slash_chord_roundtrip() {
+    fn test_encode_read_tuplet() {
         let mut score = Score::empty();
         let mut track = Track::new("t".into(), 0);
-        let mut section = Section::new("S".into());
+        let mut section = Section::new("A".into());
+        let mut m = Measure::new(0);
 
-        let sym = ChordSymbol::new(Pitch::new(NoteName::D, Accidental::Natural, None))
-            .with_quality(ChordQuality::Min)
-            .with_extension(7, false);
-        let chord = Chord::new_slash(
-            sym,
-            Pitch::new(NoteName::F, Accidental::Natural, None),
-            Duration::half(),
+        let mut tuplet = Tuplet::new((3, 2));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(4)),
+            Duration::eighth(),
             0,
-        );
-        let mut m = Measure::new(0);
-        m.push_event(MeasureEvent::Chord(chord));
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::D, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        m.push_event(MeasureEvent::Tuplet(tuplet));
         section.push_measure(m);
         track.push_section(section);
         score.push_track(track);
 
-        let decoded = roundtrip(&score);
-        if let MeasureEvent::Chord(c) = &decoded.tracks[0].sections[0].measures[0].events[0] {
-            assert!(c.slash_bass.is_some());
-            assert_eq!(c.slash_bass.unwrap().name, NoteName::F);
-            assert_eq!(c.symbol.quality, Some(ChordQuality::Min));
-        } else {
-            panic!("expected chord");
+        let perf = encode_and_read(&score);
+        match &perf.tracks[0].sections[0].measures[0].events[0] {
+            PerfEvent::Tuplet { ratio, events } => {
+                assert_eq!(*ratio, (3, 2));
+                assert_eq!(events.len(), 3);
+            }
+            _ => panic!("expected Tuplet"),
         }
+    }
+
+    #[test]
+    fn test_encode_read_empty() {
+        let score = Score::empty();
+        let perf = encode_and_read(&score);
+        assert_eq!(perf.tracks.len(), 0);
     }
 }

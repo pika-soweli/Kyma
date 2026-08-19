@@ -1,4 +1,4 @@
-﻿//! 时值载体 — 纯乐理，无物理时间换算。
+//! 时值载体 — 纯乐理，无物理时间换算。
 //!
 //! 词法：`-N` = 非附点 N 分音符，`.N` = 附点 N 分音符。
 
@@ -75,5 +75,69 @@ mod tests {
         assert_eq!(Duration::dotted_quarter().display(), ".4");
         assert_eq!(Duration::eighth().display(), "-8");
         assert_eq!(Duration::dotted_half().display(), ".2");
+    }
+
+    #[test]
+    fn test_all_durations() {
+        let whole = Duration::whole();
+        assert!((whole.value() - 1.0).abs() < 1e-6);
+        assert!((whole.quarter_notes() - 4.0).abs() < 1e-6);
+
+        let half = Duration::half();
+        assert!((half.value() - 0.5).abs() < 1e-6);
+        assert!((half.quarter_notes() - 2.0).abs() < 1e-6);
+
+        let dotted_half = Duration::dotted_half();
+        assert!((dotted_half.value() - 0.75).abs() < 1e-6);
+        assert!((dotted_half.quarter_notes() - 3.0).abs() < 1e-6);
+
+        let sixteenth = Duration::sixteenth();
+        assert!((sixteenth.value() - 0.0625).abs() < 1e-6);
+        assert!((sixteenth.quarter_notes() - 0.25).abs() < 1e-6);
+
+        let dotted_eighth = Duration::dotted_eighth();
+        assert!((dotted_eighth.value() - 0.1875).abs() < 1e-6);
+        assert!((dotted_eighth.quarter_notes() - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_dur_value_ordering() {
+        assert!(Duration::whole().value() > Duration::half().value());
+        assert!(Duration::half().value() > Duration::quarter().value());
+        assert!(Duration::quarter().value() > Duration::eighth().value());
+        assert!(Duration::eighth().value() > Duration::sixteenth().value());
+        assert!(Duration::dotted_half().value() > Duration::half().value());
+    }
+
+    #[test]
+    fn test_dur_construct() {
+        let d = Duration::new(32, false);
+        assert_eq!(d.base, 32);
+        assert!(!d.dotted);
+        assert!((d.value() - 1.0 / 32.0).abs() < 1e-6);
+
+        let d2 = Duration::new(8, true);
+        assert!(d2.dotted);
+        assert!((d2.value() - 0.1875).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_dur_equal() {
+        assert_eq!(Duration::quarter(), Duration::quarter());
+        assert_eq!(Duration::eighth(), Duration::eighth());
+        assert_ne!(Duration::quarter(), Duration::eighth());
+        assert_ne!(Duration::dotted_quarter(), Duration::quarter());
+    }
+
+    #[test]
+    fn test_dur_clone_copy_hash() {
+        use std::collections::HashSet;
+        let d1 = Duration::quarter();
+        let d2 = d1;
+        assert_eq!(d1, d2);
+        let mut set = HashSet::new();
+        set.insert(d1);
+        set.insert(d2);
+        assert_eq!(set.len(), 1);
     }
 }

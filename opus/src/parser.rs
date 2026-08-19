@@ -1,5 +1,23 @@
 //! 递归下降语法分析器 — Token 流 → sonus::Score（新语法 v2）。
 //!
+//! ## 架构
+//!
+//! ```text
+//! Parser (编排)
+//!   ├── ParseContext (共享状态: tokens / pos / default_duration)
+//!   └── rules::* (各独立解析器 struct，统一实现 ParseRule trait)
+//!         ├── HeaderParser    — @title / @key / @tempo / @time / @dur
+//!         ├── TrackParser     — track "name" instrument? { section* }
+//!         ├── SectionParser   — section "name" repeat(N)? { measure* }
+//!         ├── EventDispatcher — 按 token 分派到下列子解析器
+//!         ├── NoteParser      — pitch duration? (含连音线 ~)
+//!         ├── RestParser      — R duration?
+//!         ├── ChordParser     — [ pitch desc? (/ pitch)? ] duration?
+//!         ├── GraceParser     — grace(pitch duration?)
+//!         ├── TupletParser    — N:M { event* }
+//!         └── ControlParser   — @cresc / @key(...) / @pedal(...) ...
+//! ```
+//!
 //! ## 语法
 //!
 //! ```text
@@ -18,91 +36,70 @@
 //! note      := pitch duration?
 //! rest      := 'R' duration?
 //! chord     := '[' pitch chord_desc? ('/' pitch)? ']' duration?
-//! tie       := event '~'                    ; 连音线（Cycle 0: 消费 token）
+//! tie       := event '~'                    ; 连音线（合并时值）
 //! duration  := ':N' | ':N.'
 //! ```
-//!
-//! 若音符/和弦/休止符不带 `duration`，使用 `@dur` 设置的默认时值
-//!（未设置时默认为四分音符 `-4`）。
+
+pub mod rules;
 
 use crate::lexer::CompileError;
 use crate::token::*;
 use sonus::{
-    Accidental, Chord, ChordAlterItem, ChordQuality, ChordSymbol, AlterType,
-    Duration, InstrumentKind, Key, Measure, MeasureEvent, Note, NoteName,
-    Pitch, ScaleType, Score, Section, Tempo, TimeSig, Track,
+    rmt, Accidental, Duration, NoteName, PedalKind, Pitch, ScaleDirection, ScaleType, Score,
 };
+use rules::{HeaderParser, TrackParser};
 
-/// 全部 30 种音阶类型，用于字符串 ↔ 枚举转换。
-const ALL_SCALE_TYPES: [ScaleType; 30] = [
-    ScaleType::Major, ScaleType::Dorian, ScaleType::Phrygian, ScaleType::Lydian,
-    ScaleType::Mixolydian, ScaleType::Minor, ScaleType::Locrian,
-    ScaleType::HarmonicMinor, ScaleType::MelodicMinor,
-    ScaleType::MajorPentatonic, ScaleType::MinorPentatonic,
-    ScaleType::Blues,
-    ScaleType::WholeTone, ScaleType::Chromatic, ScaleType::Octatonic,
-    ScaleType::HungarianMinor, ScaleType::PhrygianDominant,
-    ScaleType::NeapolitanMajor, ScaleType::NeapolitanMinor,
-    ScaleType::Enigmatic, ScaleType::Oriental, ScaleType::HungarianGypsy,
-    ScaleType::Romanian, ScaleType::Persian, ScaleType::Arabic, ScaleType::Byzantine,
-    ScaleType::Egyptian, ScaleType::Hindu,
-    ScaleType::Hirajoshi, ScaleType::Insen,
-];
+// ── ParseRule trait ────────────────────────────────────────
 
-fn scale_type_from_str(s: &str) -> Option<ScaleType> {
-    ALL_SCALE_TYPES.iter().find(|&&st| st.as_str() == s).copied()
+/// 解析规则 trait — 每种语法结构对应一个实现。
+///
+/// 实现者为独立的 unit struct（如 [`NoteParser`](rules::NoteParser)），
+/// 通过 `try_parse` 从共享的 [`ParseContext`] 中消费 token 并产出结果。
+pub trait ParseRule<T> {
+    fn try_parse(&self, ctx: &mut ParseContext) -> Result<T, CompileError>;
 }
 
-// ── Parser ────────────────────────────────────────────────
+// ── ParseContext ───────────────────────────────────────────
 
-pub struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
-    /// 默认时值（由 @dur 设置，未设置时为四分音符）。
-    default_duration: Duration,
+/// 解析共享上下文 — 持有 token 流、位置指针、默认时值与调性/踏板状态。
+///
+/// 提供 token 操作（peek / advance / expect）和通用子解析
+/// （pitch / duration / scale_type）供各 [`ParseRule`] 实现使用。
+pub struct ParseContext {
+    pub(crate) tokens: Vec<Token>,
+    pub(crate) pos: usize,
+    pub(crate) default_duration: Duration,
+    /// 当前调号根音（来自 @key 头部或 @key(...) 控制命令）。
+    pub(crate) key_root: Option<NoteName>,
+    /// 当前调式（Ionian/Dorian/...）。
+    pub(crate) key_mode: Option<rmt::scale::Mode>,
+    /// 踏板状态：Vec<(轨道ID, 踏板类型)>。
+    pub(crate) pedals: Vec<(usize, PedalKind)>,
 }
 
-impl Parser {
+impl ParseContext {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
             tokens,
             pos: 0,
             default_duration: Duration::quarter(),
+            key_root: None,
+            key_mode: None,
+            pedals: Vec::new(),
         }
     }
 
-    pub fn parse(mut self) -> Result<Score, CompileError> {
-        let mut score = Score::empty();
-        let mut track_count = 0usize;
-
-        loop {
-            match &self.peek().kind {
-                TokenKind::Eof => break,
-                TokenKind::At => self.parse_header(&mut score)?,
-                TokenKind::Track => {
-                    let track = self.parse_track(track_count)?;
-                    score.push_track(track);
-                    track_count += 1;
-                }
-                _ => return Err(self.err("expected '@header' or 'track'")),
-            }
-        }
-        Ok(score)
-    }
-
-    // ── Token 操作 ──
-
-    fn peek(&self) -> &Token {
+    pub fn peek(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&EOF_TOKEN)
     }
 
-    fn advance(&mut self) {
+    pub fn advance(&mut self) {
         if self.pos < self.tokens.len() {
             self.pos += 1;
         }
     }
 
-    fn replace_current(&mut self, kind: TokenKind) {
+    pub fn replace_current(&mut self, kind: TokenKind) {
         if self.pos < self.tokens.len() {
             let line = self.tokens[self.pos].line;
             let col = self.tokens[self.pos].col;
@@ -110,28 +107,21 @@ impl Parser {
         }
     }
 
-    fn err(&self, msg: &str) -> CompileError {
+    pub fn err(&self, msg: &str) -> CompileError {
         let t = self.peek();
-        CompileError {
-            message: msg.to_string(),
-            line: t.line,
-            col: t.col,
-        }
+        CompileError { message: msg.to_string(), line: t.line, col: t.col }
     }
 
-    fn expect(&mut self, kind: &TokenKind) -> Result<(), CompileError> {
+    pub fn expect(&mut self, kind: &TokenKind) -> Result<(), CompileError> {
         if std::mem::discriminant(&self.peek().kind) == std::mem::discriminant(kind) {
             self.advance();
             Ok(())
         } else {
-            Err(self.err(&format!(
-                "expected {:?}, found {:?}",
-                kind, self.peek().kind
-            )))
+            Err(self.err(&format!("expected {:?}, found {:?}", kind, self.peek().kind)))
         }
     }
 
-    fn expect_int(&mut self) -> Result<u32, CompileError> {
+    pub fn expect_int(&mut self) -> Result<u32, CompileError> {
         match &self.peek().kind {
             TokenKind::IntLit(n) => {
                 let n = *n;
@@ -142,210 +132,20 @@ impl Parser {
         }
     }
 
-    // ── @ Headers ──
-
-    fn parse_header(&mut self, score: &mut Score) -> Result<(), CompileError> {
-        self.advance(); // '@'
-
-        let name = match &self.peek().kind {
-            TokenKind::Ident(s) => s.clone(),
-            _ => return Err(self.err("expected header name after '@'")),
-        };
-        self.advance();
-
-        self.expect(&TokenKind::LParen)?;
-
-        match name.as_str() {
-            "title" => {
-                match &self.peek().kind {
-                    TokenKind::StringLit(s) => {
-                        score.set_title(s.clone());
-                        self.advance();
-                    }
-                    _ => return Err(self.err("expected string in @title()")),
-                }
-            }
-            "key" => {
-                let root = self.parse_pitch()?;
-                self.expect(&TokenKind::Comma)?;
-                let scale_type = self.parse_scale_type()?;
-                score.set_global_key(Key::new(root, scale_type));
-            }
-            "tempo" => {
-                let bpm = self.expect_int()? as u16;
-                score.set_global_tempo(Tempo::new(bpm));
-            }
-            "time" => {
-                let beats = self.expect_int()?;
-                self.expect(&TokenKind::Slash)?;
-                let beat_value = self.expect_int()?;
-                score.set_global_time(TimeSig::new(beats, beat_value));
-            }
-            "dur" => {
-                let base = self.expect_int()?;
-                self.default_duration = Duration::new(base, false);
-            }
-            _ => return Err(self.err(&format!("unknown header: @{}", name))),
-        }
-
-        self.expect(&TokenKind::RParen)?;
-        Ok(())
-    }
-
-    // ── Track ──
-
-    fn parse_track(&mut self, track_id: usize) -> Result<Track, CompileError> {
-        self.advance(); // 'track'
-
-        let name = match &self.peek().kind {
-            TokenKind::StringLit(s) => {
-                let s = s.clone();
-                self.advance();
-                s
-            }
-            _ => return Err(self.err("expected track name string")),
-        };
-
-        let mut track = Track::new(name, track_id);
-
-        // 可选乐器名
-        if let TokenKind::Ident(s) = &self.peek().kind {
-            if let Some(inst) = InstrumentKind::from_str(s) {
-                track.set_instrument(inst);
-                self.advance();
-            }
-        }
-
-        self.expect(&TokenKind::LBrace)?;
-
-        loop {
-            match &self.peek().kind {
-                TokenKind::RBrace => {
-                    self.advance();
-                    break;
-                }
-                TokenKind::Section => {
-                    let section = self.parse_section()?;
-                    track.push_section(section);
-                }
-                _ => return Err(self.err("expected 'section' or '}'")),
-            }
-        }
-
-        Ok(track)
-    }
-
-    // ── Section ──
-
-    fn parse_section(&mut self) -> Result<Section, CompileError> {
-        self.advance(); // 'section'
-
-        let name = match &self.peek().kind {
-            TokenKind::StringLit(s) => {
-                let s = s.clone();
-                self.advance();
-                s
-            }
-            _ => return Err(self.err("expected section name string")),
-        };
-
-        let mut section = Section::new(name);
-
-        // 可选 repeat(X)
-        if matches!(self.peek().kind, TokenKind::Repeat) {
-            self.advance(); // 'repeat'
-            self.expect(&TokenKind::LParen)?;
-            let times = match &self.peek().kind {
-                TokenKind::IntLit(n) => {
-                    let n = *n;
-                    self.advance();
-                    n
-                }
-                _ => return Err(self.err("expected repeat count integer")),
-            };
-            self.expect(&TokenKind::RParen)?;
-            section.set_repeat(times);
-        }
-
-        self.expect(&TokenKind::LBrace)?;
-
-        let mut measure_idx: u32 = 0;
-        let mut current_measure = Measure::new(measure_idx);
-
-        loop {
-            match &self.peek().kind {
-                TokenKind::RBrace => {
-                    if !current_measure.events.is_empty() {
-                        section.push_measure(current_measure);
-                    }
-                    self.advance();
-                    break;
-                }
-                TokenKind::Pipe => {
-                    section.push_measure(current_measure);
-                    measure_idx += 1;
-                    current_measure = Measure::new(measure_idx);
-                    self.advance();
-                }
-                TokenKind::Eof => {
-                    return Err(self.err("unexpected EOF in section"));
-                }
-                _ => {
-                    let event = self.parse_event()?;
-                    current_measure.push_event(event);
-                }
-            }
-        }
-
-        Ok(section)
-    }
-
-    // ── Event ──
-
-    fn parse_event(&mut self) -> Result<MeasureEvent, CompileError> {
+    /// 解析可选时值标记 `:N` / `:N.`，不存在则返回默认时值。
+    pub fn parse_optional_duration(&mut self) -> Duration {
         match &self.peek().kind {
-            TokenKind::Rest => {
+            TokenKind::Duration { base, dotted } => {
+                let d = Duration::new(*base, *dotted);
                 self.advance();
-                let duration = self.parse_optional_duration();
-                Ok(MeasureEvent::Note(Note::new_rest(duration, 0)))
+                d
             }
-            TokenKind::LBracket => {
-                let chord = self.parse_chord()?;
-                Ok(MeasureEvent::Chord(chord))
-            }
-            TokenKind::NoteName(_) | TokenKind::Ident(_) => {
-                let note = self.parse_note()?;
-                // 连音线：消耗 ~ 及后续同音高音符（Cycle 0: 合并时值）
-                let mut note = note;
-                while matches!(self.peek().kind, TokenKind::Tilde) {
-                    self.advance(); // '~'
-                    let next = self.parse_note()?;
-                    // 简单连音：合并时值
-                    if let (Some(p1), Some(p2)) = (note.pitch(), next.pitch()) {
-                        if p1 == p2 {
-                            note.duration = Duration::new(
-                                note.duration.base,
-                                note.duration.dotted || next.duration.dotted,
-                            );
-                            // 连音不产生新事件，仅延长时值
-                        }
-                    }
-                }
-                Ok(MeasureEvent::Note(note))
-            }
-            _ => Err(self.err("expected note, rest, or chord")),
+            _ => self.default_duration,
         }
     }
 
-    fn parse_note(&mut self) -> Result<Note, CompileError> {
-        let pitch = self.parse_pitch()?;
-        let duration = self.parse_optional_duration();
-        Ok(Note::new_note(pitch, duration, 0))
-    }
-
-    // ── Pitch ──
-
-    fn parse_pitch(&mut self) -> Result<Pitch, CompileError> {
+    /// 解析音高字面量（NoteName / Ident 拆分 / Accidental / octave）。
+    pub fn parse_pitch(&mut self) -> Result<Pitch, CompileError> {
         let (name, acc_from_split) = match &self.peek().kind.clone() {
             TokenKind::NoteName(n) => {
                 self.advance();
@@ -377,7 +177,19 @@ impl Parser {
             _ => None,
         };
 
-        Ok(Pitch::new(name, acc, octave))
+        let pitch = Pitch::new(name, acc, octave);
+        Ok(self.apply_key_signature(pitch))
+    }
+
+    /// 为音高应用当前调号的变音记号。
+    ///
+    /// 若音高已有显式变音记号（非 Natural），则不修改。
+    /// 若调号未设置，则返回原音高。
+    pub fn apply_key_signature(&self, pitch: Pitch) -> Pitch {
+        match (self.key_root, self.key_mode) {
+            (Some(root), mode) => pitch.apply_key_signature(root, mode),
+            _ => pitch,
+        }
     }
 
     fn split_pitch_ident(&mut self, s: &str) -> Result<(NoteName, Accidental), CompileError> {
@@ -404,176 +216,66 @@ impl Parser {
 
         Ok((name, acc))
     }
-
-    // ── Duration ──
-
-    /// 解析可选的时值标记 `:N` 或 `:N.`。
-    /// 若不存在，返回默认时值。
-    fn parse_optional_duration(&mut self) -> Duration {
-        match &self.peek().kind {
-            TokenKind::Duration { base, dotted } => {
-                let d = Duration::new(*base, *dotted);
-                self.advance();
-                d
-            }
-            _ => self.default_duration,
-        }
-    }
-
-    // ── Chord ──
-
-    fn parse_chord(&mut self) -> Result<Chord, CompileError> {
-        self.expect(&TokenKind::LBracket)?;
-
-        let root = self.parse_pitch()?;
-
-        let mut quality: Option<ChordQuality> = None;
-        let mut extension: Option<u32> = None;
-        let mut major_seventh = false;
-        let mut alters: Vec<ChordAlterItem> = Vec::new();
-
-        loop {
-            match &self.peek().kind.clone() {
-                TokenKind::RBracket | TokenKind::Slash => break,
-
-                TokenKind::Ident(s) => {
-                    let s = s.clone();
-
-                    if s == "maj" || s == "major" {
-                        self.advance();
-                        if let TokenKind::IntLit(n) = &self.peek().kind {
-                            if [6u32, 7, 9, 11, 13].contains(n) {
-                                major_seventh = true;
-                                extension = Some(*n);
-                                quality = Some(ChordQuality::Maj);
-                                self.advance();
-                                continue;
-                            }
-                        }
-                        quality = Some(ChordQuality::Maj);
-                        continue;
-                    }
-
-                    if let Some(q) = ChordQuality::from_str(&s) {
-                        quality = Some(q);
-                        self.advance();
-                        if q == ChordQuality::Sus4 {
-                            if let TokenKind::IntLit(n) = &self.peek().kind {
-                                if *n == 2 {
-                                    quality = Some(ChordQuality::Sus2);
-                                    self.advance();
-                                } else if *n == 4 {
-                                    self.advance();
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    if s == "add" {
-                        self.advance();
-                        let n = self.expect_int()?;
-                        alters.push(ChordAlterItem {
-                            alter_type: AlterType::Add,
-                            number: n,
-                        });
-                        continue;
-                    }
-
-                    if s == "no" {
-                        self.advance();
-                        let n = self.expect_int()?;
-                        alters.push(ChordAlterItem {
-                            alter_type: AlterType::No,
-                            number: n,
-                        });
-                        continue;
-                    }
-
-                    return Err(self.err(&format!("unexpected identifier in chord: {}", s)));
-                }
-
-                TokenKind::IntLit(n) => {
-                    let n = *n;
-                    if n == 5 && quality.is_none() && extension.is_none() {
-                        quality = Some(ChordQuality::Power);
-                        self.advance();
-                    } else if [6u32, 7, 9, 11, 13].contains(&n) {
-                        extension = Some(n);
-                        self.advance();
-                    } else {
-                        return Err(self.err(&format!("unexpected number in chord: {}", n)));
-                    }
-                }
-
-                TokenKind::Accidental(acc) => {
-                    let acc = *acc;
-                    self.advance();
-                    let n = self.expect_int()?;
-                    let alter_type = match acc {
-                        Accidental::Sharp | Accidental::DoubleSharp => AlterType::Sharp,
-                        Accidental::Flat | Accidental::DoubleFlat => AlterType::Flat,
-                        _ => return Err(self.err("invalid accidental in chord alter")),
-                    };
-                    alters.push(ChordAlterItem {
-                        alter_type,
-                        number: n,
-                    });
-                }
-
-                _ => return Err(self.err("unexpected token in chord descriptor")),
-            }
-        }
-
-        // Slash bass
-        let slash_bass = if matches!(self.peek().kind, TokenKind::Slash) {
-            self.advance();
-            Some(self.parse_pitch()?)
-        } else {
-            None
-        };
-
-        self.expect(&TokenKind::RBracket)?;
-
-        // 和弦时值：可选，默认取 @dur
-        let duration = self.parse_optional_duration();
-
-        let mut symbol = ChordSymbol::new(root);
-        if let Some(q) = quality {
-            symbol = symbol.with_quality(q);
-        }
-        if let Some(ext) = extension {
-            symbol = symbol.with_extension(ext, major_seventh);
-        }
-        symbol.alters = alters;
-
-        let chord = match slash_bass {
-            Some(bass) => Chord::new_slash(symbol, bass, duration, 0),
-            None => Chord::new_normal(symbol, duration, 0),
-        };
-
-        Ok(chord)
-    }
-
-    // ── Scale Type ──
-
-    fn parse_scale_type(&mut self) -> Result<ScaleType, CompileError> {
-        match &self.peek().kind {
-            TokenKind::Ident(s) => {
-                let s = s.clone();
-                if let Some(st) = scale_type_from_str(&s) {
-                    self.advance();
-                    Ok(st)
-                } else {
-                    Err(self.err(&format!("unknown scale type: {}", s)))
-                }
-            }
-            _ => Err(self.err("expected scale type identifier")),
-        }
-    }
 }
 
-// ── 辅助 ──────────────────────────────────────────────────
+// ── 共享辅助 ──────────────────────────────────────────────
+
+/// 全部 30 种音阶类型，用于字符串 ↔ 枚举转换。
+const ALL_SCALE_TYPES: [ScaleType; 30] = [
+    ScaleType::Major, ScaleType::Dorian, ScaleType::Phrygian, ScaleType::Lydian,
+    ScaleType::Mixolydian, ScaleType::Minor, ScaleType::Locrian,
+    ScaleType::HarmonicMinor, ScaleType::MelodicMinor,
+    ScaleType::MajorPentatonic, ScaleType::MinorPentatonic,
+    ScaleType::Blues,
+    ScaleType::WholeTone, ScaleType::Chromatic, ScaleType::Octatonic,
+    ScaleType::HungarianMinor, ScaleType::PhrygianDominant,
+    ScaleType::NeapolitanMajor, ScaleType::NeapolitanMinor,
+    ScaleType::Enigmatic, ScaleType::Oriental, ScaleType::HungarianGypsy,
+    ScaleType::Romanian, ScaleType::Persian, ScaleType::Arabic, ScaleType::Byzantine,
+    ScaleType::Egyptian, ScaleType::Hindu,
+    ScaleType::Hirajoshi, ScaleType::Insen,
+];
+
+/// 解析音阶类型 + 可选方向。
+///
+/// 语法：`scale_type` 或 `scale_type ',' direction`
+/// direction := 'asc' | 'desc'
+pub(crate) fn parse_scale_type(ctx: &mut ParseContext) -> Result<(ScaleType, Option<ScaleDirection>), CompileError> {
+    let st = match &ctx.peek().kind {
+        TokenKind::Ident(s) => {
+            let s = s.clone();
+            if let Some(st) = scale_type_from_str(&s) {
+                ctx.advance();
+                st
+            } else {
+                return Err(ctx.err(&format!("unknown scale type: {}", s)));
+            }
+        }
+        _ => return Err(ctx.err("expected scale type identifier")),
+    };
+
+    let direction = if matches!(ctx.peek().kind, TokenKind::Comma) {
+        if let Some(TokenKind::Ident(s)) = ctx.tokens.get(ctx.pos + 1).map(|t| &t.kind) {
+            if let Some(dir) = ScaleDirection::from_str(s) {
+                ctx.advance(); // ','
+                ctx.advance(); // direction ident
+                Some(dir)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok((st, direction))
+}
+
+fn scale_type_from_str(s: &str) -> Option<ScaleType> {
+    ALL_SCALE_TYPES.iter().find(|&&st| st.as_str() == s).copied()
+}
 
 fn is_pitch_start(s: &str) -> bool {
     s.chars()
@@ -588,9 +290,48 @@ static EOF_TOKEN: Token = Token {
     col: 0,
 };
 
+// ── Parser (主编排) ────────────────────────────────────────
+
+/// 顶层解析器 — 持有 [`ParseContext`]，编排各 [`ParseRule`] 实现完成 Score 构建。
+pub struct Parser {
+    ctx: ParseContext,
+}
+
+impl Parser {
+    pub fn new(tokens: Vec<Token>) -> Self {
+        Self { ctx: ParseContext::new(tokens) }
+    }
+
+    pub fn parse(mut self) -> Result<Score, CompileError> {
+        let mut score = Score::empty();
+        let mut track_count = 0usize;
+
+        loop {
+            match &self.ctx.peek().kind {
+                TokenKind::Eof => break,
+                TokenKind::At => HeaderParser::try_parse(&mut self.ctx, &mut score)?,
+                TokenKind::Track => {
+                    let track = TrackParser::try_parse(&mut self.ctx, track_count)?;
+                    score.push_track(track);
+                    track_count += 1;
+                }
+                _ => return Err(self.ctx.err("expected '@header' or 'track'")),
+            }
+        }
+        Ok(score)
+    }
+}
+
+// ── 测试 ──────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lexer::Lexer;
+    use sonus::{
+        Accidental, AlterType, ChordQuality, Duration, LocalControl,
+        MeasureEvent, NoteName, PedalKind, ScaleType,
+    };
 
     fn parse(input: &str) -> Score {
         let tokens = Lexer::new(input).tokenize().unwrap();
@@ -604,8 +345,6 @@ mod tests {
         };
         Parser::new(tokens).parse().unwrap_err()
     }
-
-    use crate::lexer::Lexer;
 
     // ── 头部测试 ──
 
@@ -803,7 +542,6 @@ mod tests {
     fn test_tie() {
         let score = parse("track \"t\" {\nsection \"s\" {\nC4 ~ C4 |\n}\n}");
         let m = &score.tracks[0].sections[0].measures[0];
-        // 连音后应只有一个事件（合并时值）
         assert_eq!(m.events.len(), 1);
         if let MeasureEvent::Note(n) = &m.events[0] {
             assert_eq!(n.pitch().unwrap().name, NoteName::C);
@@ -844,7 +582,6 @@ mod tests {
 
     #[test]
     fn test_error_bad_token() {
-        // 新语法中 @ 是合法 token，用 $ 测试非法字符
         let e = parse_err("track \"t\" {\nsection \"s\" {\n$ |\n}\n}");
         assert!(e.message.contains("unexpected character"));
     }
@@ -879,5 +616,238 @@ mod tests {
     fn test_section_repeat_omitted() {
         let score = parse("track \"t\" {\nsection \"A\" {\nC4 |\n}\n}");
         assert_eq!(score.tracks[0].sections[0].repeat_times, None);
+    }
+
+    // ── Cycle 1: 局部控制事件 ──
+
+    #[test]
+    fn test_local_key() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n@key(A, minor) C4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Control(LocalControl::LocalKey(k)) = &m.events[0] {
+            assert_eq!(k.root.name, NoteName::A);
+            assert_eq!(k.scale_type, ScaleType::Minor);
+        } else {
+            panic!("expected LocalKey control");
+        }
+    }
+
+    #[test]
+    fn test_local_tempo() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n@tempo(90) C4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Control(LocalControl::LocalTempo(t)) = &m.events[0] {
+            assert_eq!(t.bpm(), 90);
+        } else {
+            panic!("expected LocalTempo control");
+        }
+    }
+
+    #[test]
+    fn test_local_time() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n@time(6/8) C4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Control(LocalControl::LocalTime(ts)) = &m.events[0] {
+            assert_eq!(ts.beats_per_bar, 6);
+            assert_eq!(ts.beat_value, 8);
+        } else {
+            panic!("expected LocalTime control");
+        }
+    }
+
+    #[test]
+    fn test_pedal_on_off() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n@pedal(sustain, on) C4 |\n@pedal(sustain, off) |\n}\n}");
+        let m0 = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Control(LocalControl::PedalOn(p)) = &m0.events[0] {
+            assert_eq!(*p, PedalKind::Sustain);
+        } else {
+            panic!("expected PedalOn");
+        }
+        let m1 = &score.tracks[0].sections[0].measures[1];
+        if let MeasureEvent::Control(LocalControl::PedalOff(p)) = &m1.events[0] {
+            assert_eq!(*p, PedalKind::Sustain);
+        } else {
+            panic!("expected PedalOff");
+        }
+    }
+
+    #[test]
+    fn test_dyn_and_vol() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n@dyn(f) @vol(80) C4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Control(LocalControl::DynamicMark(d)) = &m.events[0] {
+            assert_eq!(d, "f");
+        } else {
+            panic!("expected DynamicMark");
+        }
+        if let MeasureEvent::Control(LocalControl::Volume(v)) = &m.events[1] {
+            assert_eq!(*v, 80);
+        } else {
+            panic!("expected Volume");
+        }
+    }
+
+    // ── Cycle 1: 表情记号（无括号）──
+
+    #[test]
+    fn test_expression_marks() {
+        for mark in ["cresc", "decresc", "rit", "accel", "fermata"] {
+            let src = format!("track \"t\" {{\nsection \"s\" {{\n@{mark} C4 |\n}}\n}}");
+            let score = parse(&src);
+            let m = &score.tracks[0].sections[0].measures[0];
+            if let MeasureEvent::Control(LocalControl::DynamicMark(d)) = &m.events[0] {
+                assert_eq!(d, mark);
+            } else {
+                panic!("expected DynamicMark for @{mark}");
+            }
+        }
+    }
+
+    // ── Cycle 1: 连音符 ──
+
+    #[test]
+    fn test_tuplet_basic() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n3:2 { C4 E4 G4 } |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        assert_eq!(m.events.len(), 1);
+        if let MeasureEvent::Tuplet(t) = &m.events[0] {
+            assert_eq!(t.ratio, (3, 2));
+            assert_eq!(t.events.len(), 3);
+        } else {
+            panic!("expected Tuplet");
+        }
+    }
+
+    #[test]
+    fn test_tuplet_nested_events() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n3:2 { C4:8 E4:8 G4:8 } |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Tuplet(t) = &m.events[0] {
+            if let MeasureEvent::Note(n) = &t.events[0] {
+                assert_eq!(n.duration, Duration::eighth());
+            } else {
+                panic!("expected Note inside tuplet");
+            }
+        } else {
+            panic!("expected Tuplet");
+        }
+    }
+
+    // ── Cycle 1: 装饰音 ──
+
+    #[test]
+    fn test_grace_note() {
+        let score = parse("track \"t\" {\nsection \"s\" {\ngrace(C5) D4:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        assert_eq!(m.events.len(), 2);
+        if let MeasureEvent::Grace(n) = &m.events[0] {
+            assert_eq!(n.pitch().unwrap().name, NoteName::C);
+            assert_eq!(n.pitch().unwrap().octave, Some(5));
+        } else {
+            panic!("expected Grace");
+        }
+    }
+
+    #[test]
+    fn test_grace_with_duration() {
+        let score = parse("track \"t\" {\nsection \"s\" {\ngrace(C5:8) D4:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Grace(n) = &m.events[0] {
+            assert_eq!(n.duration, Duration::eighth());
+        } else {
+            panic!("expected Grace");
+        }
+    }
+
+    // ── Cycle 1: 综合场景 ──
+
+    #[test]
+    fn test_mixed_cycle1_events() {
+        let score = parse("track \"piano\" piano {\nsection \"A\" {\n@pedal(sustain, on) grace(C5) 3:2 { D4:8 E4:8 F4:8 } G4:4 @pedal(sustain, off) |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        assert_eq!(m.events.len(), 5);
+        assert!(matches!(m.events[0], MeasureEvent::Control(LocalControl::PedalOn(_))));
+        assert!(matches!(m.events[1], MeasureEvent::Grace(_)));
+        assert!(matches!(m.events[2], MeasureEvent::Tuplet(_)));
+        assert!(matches!(m.events[3], MeasureEvent::Note(_)));
+        assert!(matches!(m.events[4], MeasureEvent::Control(LocalControl::PedalOff(_))));
+    }
+
+    // ── Cycle 2: rmt 深度集成 ──
+
+    #[test]
+    fn test_halfdim_chord() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n[B halfdim 7]:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Chord(c) = &m.events[0] {
+            assert_eq!(c.symbol.quality, Some(ChordQuality::HalfDim));
+            assert_eq!(c.symbol.base_number, Some(7));
+        } else {
+            panic!("expected Chord");
+        }
+    }
+
+    #[test]
+    fn test_dim_chord() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n[C dim]:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Chord(c) = &m.events[0] {
+            assert_eq!(c.symbol.quality, Some(ChordQuality::Dim));
+        } else {
+            panic!("expected Chord");
+        }
+    }
+
+    #[test]
+    fn test_chord_inversion() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n[C maj /2]:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Chord(c) = &m.events[0] {
+            assert_eq!(c.inversion, 2);
+            assert!(c.slash_bass.is_none());
+        } else {
+            panic!("expected Chord");
+        }
+    }
+
+    #[test]
+    fn test_key_with_direction() {
+        let score = parse("@key(C, major, asc)\ntrack \"t\" {\nsection \"s\" {\nC4:4 |\n}\n}");
+        assert_eq!(score.global_key.unwrap().scale_type, ScaleType::Major);
+    }
+
+    #[test]
+    fn test_dom_chord() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n[G dom 7]:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Chord(c) = &m.events[0] {
+            assert_eq!(c.symbol.quality, Some(ChordQuality::Dom));
+            assert_eq!(c.symbol.base_number, Some(7));
+        } else {
+            panic!("expected Chord");
+        }
+    }
+
+    #[test]
+    fn test_chord_inversion_first() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n[C maj /1]:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Chord(c) = &m.events[0] {
+            assert_eq!(c.inversion, 1);
+        } else {
+            panic!("expected Chord");
+        }
+    }
+
+    #[test]
+    fn test_chord_inversion_third() {
+        let score = parse("track \"t\" {\nsection \"s\" {\n[C7 /3]:4 |\n}\n}");
+        let m = &score.tracks[0].sections[0].measures[0];
+        if let MeasureEvent::Chord(c) = &m.events[0] {
+            assert_eq!(c.inversion, 3);
+        } else {
+            panic!("expected Chord");
+        }
     }
 }

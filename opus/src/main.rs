@@ -2,7 +2,8 @@
 //!
 //! ```sh
 //! opus <input.tm> [-o output.bm]   编译 .tm → .bm
-//! opus --decode <input.bm>         解码 .bm 并打印 Score 概要
+//! opus --perform <input.bm>        读取 .bm 并通过 MIDI 播放
+//! opus --list-ports                列出可用 MIDI 端口
 //! opus --version                   版本信息
 //! ```
 
@@ -18,17 +19,18 @@ fn print_usage() {
     eprintln!();
     eprintln!("USAGE:");
     eprintln!("  opus <input.tm> [-o output.bm]    Compile .tm source to .bm binary");
-    eprintln!("  opus --decode <input.bm>          Decode .bm and print score summary");
-    eprintln!("  opus --version                    Print version");
+    eprintln!("  opus --perform <input.bm>          Read .bm and play via MIDI");
+    eprintln!("  opus --list-ports                  List available MIDI output ports");
+    eprintln!("  opus --version                     Print version");
     eprintln!();
     eprintln!("EXAMPLES:");
-    eprintln!("  opus song.tm                      → produces song.bm");
-    eprintln!("  opus song.tm -o out/song.bm       → custom output path");
-    eprintln!("  opus --decode song.bm             → prints score structure");
+    eprintln!("  opus song.tm                       → produces song.bm");
+    eprintln!("  opus song.tm -o out/song.bm        → custom output path");
+    eprintln!("  opus --perform song.bm             → play .bm via MIDI");
+    eprintln!("  opus --perform song.bm --port 1    → play on specific MIDI port");
 }
 
 fn cmd_compile(input_path: &str, output_override: Option<&str>) -> ExitCode {
-    // 读取源文件
     let source = match fs::read_to_string(input_path) {
         Ok(s) => s,
         Err(e) => {
@@ -37,7 +39,6 @@ fn cmd_compile(input_path: &str, output_override: Option<&str>) -> ExitCode {
         }
     };
 
-    // 编译
     let bytes = match opus::compile(&source) {
         Ok(b) => b,
         Err(e) => {
@@ -46,7 +47,6 @@ fn cmd_compile(input_path: &str, output_override: Option<&str>) -> ExitCode {
         }
     };
 
-    // 确定输出路径
     let output_path = match output_override {
         Some(p) => PathBuf::from(p),
         None => {
@@ -58,7 +58,6 @@ fn cmd_compile(input_path: &str, output_override: Option<&str>) -> ExitCode {
         }
     };
 
-    // 写入
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() {
             let _ = fs::create_dir_all(parent);
@@ -82,7 +81,15 @@ fn cmd_compile(input_path: &str, output_override: Option<&str>) -> ExitCode {
     }
 }
 
-fn cmd_decode(input_path: &str) -> ExitCode {
+fn cmd_perform(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("error: --perform requires a .bm file path");
+        return ExitCode::from(1);
+    }
+
+    let input_path = &args[0];
+    let port_index = parse_port_flag(&args[1..]);
+
     let bytes = match fs::read(input_path) {
         Ok(b) => b,
         Err(e) => {
@@ -91,64 +98,50 @@ fn cmd_decode(input_path: &str) -> ExitCode {
         }
     };
 
-    // 打印 magic
-    if bytes.len() >= 4 {
-        eprintln!("magic: {:02X} {:02X} {:02X} {:02X} ({})",
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            std::str::from_utf8(&bytes[0..4]).unwrap_or("?"));
-    }
-    eprintln!("size: {} bytes", bytes.len());
-
-    let score = match opus::ir::decode(&bytes) {
+    let score = match perform::reader::read(&bytes) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: IR decode failed: {}", e);
+            eprintln!("error: failed to read .bm: {}", e);
             return ExitCode::from(1);
         }
     };
 
-    // 打印概要
-    println!("── Score ──────────────────────────");
     if let Some(ref title) = score.title {
-        println!("  title:  {}", title);
-    }
-    if let Some(ref key) = score.global_key {
-        println!("  key:    {}", key.display());
-    }
-    if let Some(ref tempo) = score.global_tempo {
-        println!("  tempo:  {}", tempo.display());
-    }
-    if let Some(ref time) = score.global_time {
-        println!("  time:   {}/{}", time.beats_per_bar, time.beat_value);
-    }
-    println!("  tracks: {}", score.tracks.len());
-
-    for (i, track) in score.tracks.iter().enumerate() {
-        println!("  ── Track {} ──", i);
-        println!("    name:  {}", track.name);
-        if let Some(ref inst) = track.instrument {
-            println!("    inst:  {} (#{})", inst.display_name(), inst.index());
-        }
-        println!("    sections: {}", track.sections.len());
-        for (j, section) in track.sections.iter().enumerate() {
-            let repeat = section.repeat_times
-                .map(|r| format!(" ×{}", r))
-                .unwrap_or_default();
-            println!("    [{}] \"{}\"{} — {} measures", j, section.name, repeat, section.measures.len());
-            for (k, measure) in section.measures.iter().enumerate() {
-                let event_summary: Vec<String> = measure.events.iter().map(|e| {
-                    match e {
-                        sonus::MeasureEvent::Note(n) => n.display(),
-                        sonus::MeasureEvent::Chord(c) => c.display(),
-                        sonus::MeasureEvent::Control(_) => "(ctrl)".to_string(),
-                    }
-                }).collect();
-                println!("      m{}: {}", k, event_summary.join("  "));
-            }
-        }
+        eprintln!("playing: {} (tempo: {} BPM)", title, score.global_tempo);
+    } else {
+        eprintln!("playing: (untitled) (tempo: {} BPM)", score.global_tempo);
     }
 
-    println!("── End ────────────────────────────");
+    match perform::player::play(&score, port_index) {
+        Ok(_) => {
+            eprintln!("done.");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn parse_port_flag(args: &[String]) -> Option<usize> {
+    for i in 0..args.len() {
+        if args[i] == "--port" && i + 1 < args.len() {
+            return args[i + 1].parse().ok();
+        }
+    }
+    None
+}
+
+fn cmd_list_ports() -> ExitCode {
+    let ports = perform::player::list_ports();
+    if ports.is_empty() {
+        eprintln!("no MIDI output ports found");
+        return ExitCode::from(1);
+    }
+    for (i, name) in ports.iter().enumerate() {
+        println!("  [{}] {}", i, name);
+    }
     ExitCode::SUCCESS
 }
 
@@ -169,15 +162,9 @@ fn main() -> ExitCode {
             print_usage();
             ExitCode::SUCCESS
         }
-        "--decode" => {
-            if args.len() < 3 {
-                eprintln!("error: --decode requires a .bm file path");
-                return ExitCode::from(1);
-            }
-            cmd_decode(&args[2])
-        }
+        "--perform" => cmd_perform(&args[2..]),
+        "--list-ports" => cmd_list_ports(),
         _ => {
-            // 编译模式: opus <input.tm> [-o output.bm]
             let input_path = &args[1];
             let output_override = if args.len() >= 4 && args[2] == "-o" {
                 Some(args[3].as_str())

@@ -1,4 +1,4 @@
-﻿//! # opus — toki-musi 编译器
+//! # opus — toki-musi 编译器
 //!
 //! 将 `.tm` (toki-musi) 源文件编译为 `.bm` (Bin Musi IR) 二进制格式。
 //!
@@ -13,7 +13,7 @@
 //! ```sh
 //! opus input.tm              # 输出 input.bm
 //! opus input.tm -o out.bm    # 指定输出路径
-//! opus --decode input.bm     # 解码 .bm 并打印 Score 结构
+//! opus --perform input.bm    # 读取 .bm 并通过 MIDI 播放
 //! ```
 
 pub mod token;
@@ -22,7 +22,6 @@ pub mod parser;
 pub mod ir;
 
 pub use lexer::CompileError;
-pub use ir::IrError;
 
 /// 完整编译流水线：`.tm` 文本 → `Score`。
 pub fn compile_to_score(input: &str) -> Result<sonus::Score, CompileError> {

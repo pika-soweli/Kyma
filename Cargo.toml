@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 sonus = { path = "./sonus" }
 opus = { path = "./opus" }
+perform = { path = "./perform" }
 
 [workspace]
-members = ["sonus", "opus"]
+members = ["sonus", "opus", "perform"]

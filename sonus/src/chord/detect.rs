@@ -1,4 +1,4 @@
-﻿//! 和弦识别 — 从音级类列表识别和弦（多候选）。
+//! 和弦识别 — 从音级类列表识别和弦（多候选）。
 //!
 //! 使用数据驱动的模式表，支持三和弦至十三和弦的常见类型。
 //! 当输入匹配多个模式时，返回所有候选（按匹配度排序）。
@@ -220,12 +220,44 @@ mod tests {
 
     #[test]
     fn test_multi_candidate() {
-        // C major triad {0, 4, 7} can be identified as C major
-        // but also as subset of Cmaj7, C6, C9, etc.
         let candidates = identify_chord(&[0, 4, 7]);
-        // At minimum, should find C major (exact) and several subset matches
         assert!(candidates.len() >= 1);
         let has_exact = candidates.iter().any(|c| c.match_type == MatchType::Exact);
         assert!(has_exact);
+    }
+
+    #[test]
+    fn test_identify_no_match() {
+        // A single semitone interval doesn't match any known chord pattern
+        let result = identify_chord_best(&[0, 1]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_identify_augmented_triad() {
+        let best = identify_chord_best(&[0, 4, 8]);
+        assert!(best.is_some());
+        let c = best.unwrap();
+        assert_eq!(c.quality, ChordQuality::Aug);
+    }
+
+    #[test]
+    fn test_identify_sus_triads() {
+        let sus2 = identify_chord_best(&[0, 2, 7]);
+        assert!(sus2.is_some());
+        assert_eq!(sus2.unwrap().quality, ChordQuality::Sus2);
+
+        let sus4 = identify_chord_best(&[0, 5, 7]);
+        assert!(sus4.is_some());
+        assert_eq!(sus4.unwrap().quality, ChordQuality::Sus4);
+    }
+
+    #[test]
+    fn test_identify_subset_ranking() {
+        let candidates = identify_chord(&[0, 4, 7]);
+        // First candidate must be exact match
+        assert_eq!(candidates[0].match_type, MatchType::Exact);
+        assert_eq!(candidates[0].root_name, "C");
+        assert_eq!(candidates[0].quality, ChordQuality::Maj);
     }
 }

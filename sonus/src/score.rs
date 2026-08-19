@@ -7,6 +7,7 @@ use super::note::Note;
 use super::key::Key;
 use super::tempo::Tempo;
 use super::instrument::InstrumentKind;
+use super::duration::Duration;
 
 /// 拍号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,12 +70,33 @@ pub enum LocalControl {
     DynamicMark(String),
 }
 
+/// 连音符。
+#[derive(Debug, Clone)]
+pub struct Tuplet {
+    /// 比例，如 (3, 2) 表示三连音（3 个音占 2 个音的时值）。
+    pub ratio: (u32, u32),
+    pub events: Vec<MeasureEvent>,
+}
+
+impl Tuplet {
+    pub fn new(ratio: (u32, u32)) -> Self {
+        Self { ratio, events: Vec::new() }
+    }
+
+    pub fn push_event(&mut self, event: MeasureEvent) {
+        self.events.push(event);
+    }
+}
+
 /// 小节事件。
 #[derive(Debug, Clone)]
 pub enum MeasureEvent {
     Note(Note),
     Chord(Chord),
     Control(LocalControl),
+    Tuplet(Tuplet),
+    /// 装饰音（时值极短，不占拍）。
+    Grace(Note),
 }
 
 /// 小节。
@@ -146,6 +168,8 @@ pub struct Score {
     pub global_key: Option<Key>,
     pub global_tempo: Option<Tempo>,
     pub global_time: Option<TimeSig>,
+    /// 默认时值（由 @dur(N) 设置，未设置时为四分音符）。
+    pub default_duration: Duration,
     pub tracks: Vec<Track>,
 }
 
@@ -156,6 +180,7 @@ impl Score {
             global_key: None,
             global_tempo: None,
             global_time: None,
+            default_duration: Duration::quarter(),
             tracks: Vec::new(),
         }
     }
@@ -188,34 +213,26 @@ impl Score {
         self.global_tempo.as_ref().map(|t| t.bpm()).unwrap_or(120)
     }
 
-    /// 收集所有音符（不展开段落重复）。
+    /// 收集所有音符（不展开段落重复，不递归 Tuplet）。
     pub fn all_notes(&self) -> Vec<&Note> {
         let mut notes = Vec::new();
         for track in &self.tracks {
             for section in &track.sections {
                 for measure in &section.measures {
-                    for event in &measure.events {
-                        if let MeasureEvent::Note(note) = event {
-                            notes.push(note);
-                        }
-                    }
+                    collect_notes(&measure.events, &mut notes);
                 }
             }
         }
         notes
     }
 
-    /// 收集所有和弦（不展开段落重复）。
+    /// 收集所有和弦（不展开段落重复，不递归 Tuplet）。
     pub fn all_chords(&self) -> Vec<&Chord> {
         let mut chords = Vec::new();
         for track in &self.tracks {
             for section in &track.sections {
                 for measure in &section.measures {
-                    for event in &measure.events {
-                        if let MeasureEvent::Chord(chord) = event {
-                            chords.push(chord);
-                        }
-                    }
+                    collect_chords(&measure.events, &mut chords);
                 }
             }
         }
@@ -230,19 +247,42 @@ impl Score {
         for track in &mut self.tracks {
             for section in &mut track.sections {
                 for measure in &mut section.measures {
-                    for event in &mut measure.events {
-                        match event {
-                            MeasureEvent::Note(note) => {
-                                note.transpose(semitones);
-                            }
-                            MeasureEvent::Chord(chord) => {
-                                chord.transpose(semitones);
-                            }
-                            MeasureEvent::Control(_) => {}
-                        }
-                    }
+                    transpose_events(&mut measure.events, semitones);
                 }
             }
+        }
+    }
+}
+
+// ── 递归辅助函数 ──────────────────────────────────────────
+
+fn collect_notes<'a>(events: &'a [MeasureEvent], notes: &mut Vec<&'a Note>) {
+    for event in events {
+        match event {
+            MeasureEvent::Note(n) | MeasureEvent::Grace(n) => notes.push(n),
+            MeasureEvent::Tuplet(t) => collect_notes(&t.events, notes),
+            _ => {}
+        }
+    }
+}
+
+fn collect_chords<'a>(events: &'a [MeasureEvent], chords: &mut Vec<&'a Chord>) {
+    for event in events {
+        match event {
+            MeasureEvent::Chord(c) => chords.push(c),
+            MeasureEvent::Tuplet(t) => collect_chords(&t.events, chords),
+            _ => {}
+        }
+    }
+}
+
+fn transpose_events(events: &mut [MeasureEvent], semitones: i8) {
+    for event in events {
+        match event {
+            MeasureEvent::Note(n) | MeasureEvent::Grace(n) => n.transpose(semitones),
+            MeasureEvent::Chord(c) => c.transpose(semitones),
+            MeasureEvent::Tuplet(t) => transpose_events(&mut t.events, semitones),
+            MeasureEvent::Control(_) => {}
         }
     }
 }
@@ -334,5 +374,110 @@ mod tests {
 
         assert_eq!(score.all_notes().len(), 2);
         assert_eq!(score.all_chords().len(), 1);
+    }
+
+    #[test]
+    fn test_all_notes_in_tuplet() {
+        let mut score = Score::empty();
+        let mut track = Track::new("t".to_string(), 0);
+        let mut section = Section::new("A".to_string());
+        let mut measure = Measure::new(0);
+
+        let mut tuplet = Tuplet::new((3, 2));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(4)),
+            super::super::duration::Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            super::super::duration::Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::G, Accidental::Natural, Some(4)),
+            super::super::duration::Duration::eighth(),
+            0,
+        )));
+        measure.push_event(MeasureEvent::Tuplet(tuplet));
+        section.push_measure(measure);
+        track.push_section(section);
+        score.push_track(track);
+
+        assert_eq!(score.all_notes().len(), 3);
+    }
+
+    #[test]
+    fn test_all_notes_in_grace() {
+        let mut score = Score::empty();
+        let mut track = Track::new("t".to_string(), 0);
+        let mut section = Section::new("A".to_string());
+        let mut measure = Measure::new(0);
+
+        measure.push_event(MeasureEvent::Grace(Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(5)),
+            super::super::duration::Duration::eighth(),
+            0,
+        )));
+        section.push_measure(measure);
+        track.push_section(section);
+        score.push_track(track);
+
+        assert_eq!(score.all_notes().len(), 1);
+    }
+
+    #[test]
+    fn test_transpose_recursive_tuplet() {
+        let mut score = Score::empty();
+        let mut track = Track::new("t".to_string(), 0);
+        let mut section = Section::new("A".to_string());
+        let mut measure = Measure::new(0);
+
+        let mut tuplet = Tuplet::new((3, 2));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(4)),
+            super::super::duration::Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            super::super::duration::Duration::eighth(),
+            0,
+        )));
+        measure.push_event(MeasureEvent::Tuplet(tuplet));
+        section.push_measure(measure);
+        track.push_section(section);
+        score.push_track(track);
+
+        score.transpose(4);
+        let notes = score.all_notes();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].pitch().unwrap().name, NoteName::E);
+        assert_eq!(notes[1].pitch().unwrap().name, NoteName::G);
+        assert_eq!(notes[1].pitch().unwrap().acc, Accidental::Sharp);
+    }
+
+    #[test]
+    fn test_score_clone() {
+        let mut score = Score::empty();
+        score.set_title("Test".to_string());
+        score.set_global_tempo(Tempo::new(120));
+
+        let mut track = Track::new("t".to_string(), 0);
+        let mut section = Section::new("A".to_string());
+        let mut measure = Measure::new(0);
+        measure.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(4)),
+            super::super::duration::Duration::quarter(),
+            0,
+        )));
+        section.push_measure(measure);
+        track.push_section(section);
+        score.push_track(track);
+
+        let score2 = score.clone();
+        assert_eq!(score2.title, Some("Test".to_string()));
+        assert_eq!(score2.global_bpm(), 120);
+        assert_eq!(score2.tracks.len(), 1);
     }
 }

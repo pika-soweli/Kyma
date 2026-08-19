@@ -21,6 +21,7 @@ pub enum TokenKind {
     Voice,
     Let,
     Repeat,
+    Grace,
 
     // ── 字面量 ──
     StringLit(String),
@@ -78,6 +79,7 @@ pub fn keyword_lookup(s: &str) -> Option<TokenKind> {
         "voice" => Some(TokenKind::Voice),
         "let" => Some(TokenKind::Let),
         "repeat" => Some(TokenKind::Repeat),
+        "grace" => Some(TokenKind::Grace),
         _ => None,
     }
 }

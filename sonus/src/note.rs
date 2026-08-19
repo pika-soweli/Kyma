@@ -1,4 +1,4 @@
-﻿//! 音符 — 零 MIDI 耦合。
+//! 音符 — 零 MIDI 耦合。
 //!
 //! 音符 = 音高 + 时值 + 力度 + 轨道。
 
@@ -73,6 +73,16 @@ impl Note {
         };
         format!("{}{}", head, self.duration.display())
     }
+
+    /// 计算 MIDI 音符值（0-127）。
+    ///
+    /// 休止符返回 `None`。
+    pub fn to_midi(&self) -> Option<u8> {
+        match &self.kind {
+            NoteKind::Normal(p) => p.to_midi(),
+            NoteKind::Rest => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,5 +127,69 @@ mod tests {
         let mut note = Note::new_rest(Duration::quarter(), 0);
         note.transpose(5);
         assert!(note.is_rest());
+    }
+
+    #[test]
+    fn test_velocity_clamp() {
+        let mut n = Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(4)),
+            Duration::quarter(),
+            0,
+        );
+        n.set_velocity(200);
+        assert_eq!(n.velocity(), 127);
+        n.set_velocity(0);
+        assert_eq!(n.velocity(), 0);
+        n.set_velocity(127);
+        assert_eq!(n.velocity(), 127);
+    }
+
+    #[test]
+    fn test_note_velocity_default() {
+        let n = Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        );
+        assert_eq!(n.velocity(), 100);
+    }
+
+    #[test]
+    fn test_note_display() {
+        let n = Note::new_note(
+            Pitch::new(NoteName::D, Accidental::Sharp, Some(5)),
+            Duration::quarter(),
+            0,
+        );
+        assert_eq!(n.display(), "D#5-4");
+    }
+
+    #[test]
+    fn test_note_pitch_ref() {
+        let n = Note::new_note(
+            Pitch::new(NoteName::G, Accidental::Natural, Some(4)),
+            Duration::half(),
+            0,
+        );
+        let p = n.pitch().unwrap();
+        assert_eq!(p.name, NoteName::G);
+        assert_eq!(p.acc, Accidental::Natural);
+        assert_eq!(p.octave, Some(4));
+    }
+
+    #[test]
+    fn test_rest_pitch_none() {
+        let n = Note::new_rest(Duration::quarter(), 0);
+        assert!(n.pitch().is_none());
+    }
+
+    #[test]
+    fn test_note_duration() {
+        let n = Note::new_note(
+            Pitch::new(NoteName::A, Accidental::Natural, Some(4)),
+            Duration::dotted_half(),
+            0,
+        );
+        assert_eq!(n.duration, Duration::dotted_half());
     }
 }

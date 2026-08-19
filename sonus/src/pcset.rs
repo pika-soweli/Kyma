@@ -1,4 +1,4 @@
-﻿//! 音级集合（Pitch Class Set）— Forte 集合论基础运算。
+//! 音级集合（Pitch Class Set）— Forte 集合论基础运算。
 //!
 //! 使用 12 位整数掩码表示集合，支持标准型、原型型与音程向量。
 
@@ -315,5 +315,45 @@ mod tests {
         let s = PcSet::from_pcs(&[0, 3, 7]);
         let pf = s.prime_form();
         assert_eq!(pf, vec![0, 3, 7]);
+    }
+
+    #[test]
+    fn test_empty_pcset() {
+        let empty = PcSet::empty();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        assert!(!empty.contains(0));
+    }
+
+    #[test]
+    fn test_single_note_pcset() {
+        let single = PcSet::from_pcs(&[0]);
+        assert!(!single.is_empty());
+        assert_eq!(single.len(), 1);
+        assert!(single.contains(0));
+        assert!(!single.contains(1));
+    }
+
+    #[test]
+    fn test_full_octave_pcset() {
+        let full = PcSet::from_pcs(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(full.len(), 12);
+        for i in 0..12 {
+            assert!(full.contains(i));
+        }
+    }
+
+    #[test]
+    fn test_duplicate_notes_dedup() {
+        let dup = PcSet::from_pcs(&[0, 0, 0, 4, 4, 7, 7]);
+        assert_eq!(dup.len(), 3);
+    }
+
+    #[test]
+    fn test_out_of_range_normalized() {
+        let pcs = PcSet::from_pcs(&[0, 12, 14]);
+        assert_eq!(pcs.len(), 2);
+        assert!(pcs.contains(0));
+        assert!(pcs.contains(2));
     }
 }

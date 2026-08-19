@@ -5,3 +5,4 @@ edition = "2021"
 description = "Pure music-theory domain model — zero MIDI coupling"
 
 [dependencies]
+rust-music-theory = "0.4"

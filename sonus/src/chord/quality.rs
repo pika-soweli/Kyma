@@ -1,6 +1,6 @@
-﻿//! 和弦品质 — 7 种三和弦品质及其音程模式。
+﻿//! 和弦品质 — 9 种品质及其音程模式。
 
-/// 三和弦品质。
+/// 和弦品质。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChordQuality {
     Maj,
@@ -10,6 +10,10 @@ pub enum ChordQuality {
     Sus2,
     Sus4,
     Power,
+    /// 半减（= Locrian 三和弦）：root, m3, d5。配合 7 度构成 ø7。
+    HalfDim,
+    /// 属三和弦（= 大三和弦，暗示属七）。
+    Dom,
 }
 
 impl ChordQuality {
@@ -22,6 +26,8 @@ impl ChordQuality {
             "sus2" => Some(Self::Sus2),
             "sus" | "sus4" => Some(Self::Sus4),
             "5" | "power" => Some(Self::Power),
+            "halfdim" | "ø" | "half_diminished" => Some(Self::HalfDim),
+            "dom" | "dominant" => Some(Self::Dom),
             _ => None,
         }
     }
@@ -36,6 +42,8 @@ impl ChordQuality {
             Self::Sus2 => "sus2",
             Self::Sus4 => "sus4",
             Self::Power => "5",
+            Self::HalfDim => "halfdim",
+            Self::Dom => "dom",
         }
     }
 
@@ -49,10 +57,12 @@ impl ChordQuality {
             Self::Sus2 => "sus2",
             Self::Sus4 => "sus4",
             Self::Power => "5",
+            Self::HalfDim => "ø",
+            Self::Dom => "",
         }
     }
 
-    /// 三和弦音程模式（相对根音的半音偏移）。
+    /// 音程模式（相对根音的半音偏移）。
     pub fn intervals(&self) -> &'static [i8] {
         match self {
             Self::Maj => &[0, 4, 7],
@@ -62,6 +72,42 @@ impl ChordQuality {
             Self::Sus2 => &[0, 2, 7],
             Self::Sus4 => &[0, 5, 7],
             Self::Power => &[0, 7],
+            Self::HalfDim => &[0, 3, 6],
+            Self::Dom => &[0, 4, 7],
+        }
+    }
+}
+
+// ── rust-music-theory 互转 ────────────────────────────────
+
+use crate::rmt;
+
+impl From<ChordQuality> for rmt::chord::Quality {
+    fn from(q: ChordQuality) -> Self {
+        match q {
+            ChordQuality::Maj | ChordQuality::Dom => rmt::chord::Quality::Major,
+            ChordQuality::Min => rmt::chord::Quality::Minor,
+            ChordQuality::Dim => rmt::chord::Quality::Diminished,
+            ChordQuality::Aug => rmt::chord::Quality::Augmented,
+            ChordQuality::Sus2 => rmt::chord::Quality::Suspended2,
+            ChordQuality::Sus4 => rmt::chord::Quality::Suspended4,
+            ChordQuality::Power => rmt::chord::Quality::Major,
+            ChordQuality::HalfDim => rmt::chord::Quality::HalfDiminished,
+        }
+    }
+}
+
+impl From<rmt::chord::Quality> for ChordQuality {
+    fn from(q: rmt::chord::Quality) -> Self {
+        match q {
+            rmt::chord::Quality::Major => ChordQuality::Maj,
+            rmt::chord::Quality::Minor => ChordQuality::Min,
+            rmt::chord::Quality::Diminished => ChordQuality::Dim,
+            rmt::chord::Quality::Augmented => ChordQuality::Aug,
+            rmt::chord::Quality::HalfDiminished => ChordQuality::HalfDim,
+            rmt::chord::Quality::Dominant => ChordQuality::Dom,
+            rmt::chord::Quality::Suspended2 => ChordQuality::Sus2,
+            rmt::chord::Quality::Suspended4 => ChordQuality::Sus4,
         }
     }
 }

@@ -196,6 +196,80 @@ impl Interval {
     pub fn major_thirteenth() -> Self { Self::new(13, IntervalQuality::Major) }
 }
 
+// ── rust-music-theory 互转 ────────────────────────────────
+
+use crate::rmt;
+
+impl From<IntervalQuality> for rmt::interval::Quality {
+    fn from(q: IntervalQuality) -> Self {
+        match q {
+            IntervalQuality::Perfect => rmt::interval::Quality::Perfect,
+            IntervalQuality::Major => rmt::interval::Quality::Major,
+            IntervalQuality::Minor => rmt::interval::Quality::Minor,
+            IntervalQuality::Augmented | IntervalQuality::DoublyAugmented => {
+                rmt::interval::Quality::Augmented
+            }
+            IntervalQuality::Diminished | IntervalQuality::DoublyDiminished => {
+                rmt::interval::Quality::Diminished
+            }
+        }
+    }
+}
+
+impl From<rmt::interval::Quality> for IntervalQuality {
+    fn from(q: rmt::interval::Quality) -> Self {
+        match q {
+            rmt::interval::Quality::Perfect => IntervalQuality::Perfect,
+            rmt::interval::Quality::Major => IntervalQuality::Major,
+            rmt::interval::Quality::Minor => IntervalQuality::Minor,
+            rmt::interval::Quality::Augmented => IntervalQuality::Augmented,
+            rmt::interval::Quality::Diminished => IntervalQuality::Diminished,
+        }
+    }
+}
+
+impl From<Interval> for rmt::interval::Interval {
+    fn from(i: Interval) -> Self {
+        let simple = i.simple_degree();
+        let number = match simple {
+            1 => rmt::interval::Number::Unison,
+            2 => rmt::interval::Number::Second,
+            3 => rmt::interval::Number::Third,
+            4 => rmt::interval::Number::Fourth,
+            5 => rmt::interval::Number::Fifth,
+            6 => rmt::interval::Number::Sixth,
+            7 => rmt::interval::Number::Seventh,
+            8 => rmt::interval::Number::Octave,
+            _ => rmt::interval::Number::Unison,
+        };
+        let semi = i.semitones().max(0) as u8;
+        rmt::interval::Interval::from_semitone(semi).unwrap_or_else(|_| {
+            rmt::interval::Interval {
+                semitone_count: semi,
+                quality: i.quality.into(),
+                number,
+                step: None,
+            }
+        })
+    }
+}
+
+impl From<rmt::interval::Interval> for Interval {
+    fn from(i: rmt::interval::Interval) -> Self {
+        let degree = match i.number {
+            rmt::interval::Number::Unison => 1,
+            rmt::interval::Number::Second => 2,
+            rmt::interval::Number::Third => 3,
+            rmt::interval::Number::Fourth => 4,
+            rmt::interval::Number::Fifth => 5,
+            rmt::interval::Number::Sixth => 6,
+            rmt::interval::Number::Seventh => 7,
+            rmt::interval::Number::Octave => 8,
+        };
+        Interval::from_semitones(i.semitone_count as i8, degree)
+    }
+}
+
 // ── 自由函数 ──────────────────────────────────────────────
 
 /// 计算两个音高之间的音程（仅取音级部分，忽略八度）。

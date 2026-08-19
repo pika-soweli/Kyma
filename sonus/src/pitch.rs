@@ -296,6 +296,211 @@ impl Pitch {
         }
         s
     }
+
+    /// 计算 MIDI 音符值（0-127）。
+    ///
+    /// MIDI 标准：C4 = 60。若八度为 `None` 则返回 `None`。
+    ///
+    /// 公式：`midi = (octave + 1) * 12 + semitone`
+    pub fn to_midi(&self) -> Option<u8> {
+        let octave = self.octave?;
+        let midi = (octave as i16 + 1) * 12 + self.semitone() as i16;
+        if (0..=127).contains(&midi) {
+            Some(midi as u8)
+        } else {
+            None
+        }
+    }
+
+    /// 在指定调性上下文中，为无变音记号的音高应用调号变音。
+    ///
+    /// 若音高已有显式变音记号（非 Natural），则不修改。
+    pub fn apply_key_signature(
+        &self,
+        key_root: NoteName,
+        key_mode: Option<crate::rmt::scale::Mode>,
+    ) -> Self {
+        if self.acc != Accidental::Natural {
+            return *self;
+        }
+
+        // 使用 Key 结构获取调号的音阶，查找当前音名对应的变音记号
+        use crate::key::Key;
+        use crate::scale::ScaleType;
+
+        // 根据 key_mode 确定 ScaleType
+        let scale_type = match key_mode {
+            Some(crate::rmt::scale::Mode::Ionian) | None => ScaleType::Major,
+            Some(crate::rmt::scale::Mode::Aeolian) => ScaleType::Minor,
+            Some(crate::rmt::scale::Mode::Dorian) => ScaleType::Dorian,
+            Some(crate::rmt::scale::Mode::Mixolydian) => ScaleType::Mixolydian,
+            _ => ScaleType::Major, // 默认大调
+        };
+
+        let root_pitch = Pitch::new(key_root, Accidental::Natural, None);
+        let key = Key::new(root_pitch, scale_type);
+        let scale_pitches = key.scale();
+
+        // 查找当前音名在音阶中的变音记号
+        let key_acc = scale_pitches
+            .iter()
+            .find(|p| p.name == self.name)
+            .map(|p| p.acc)
+            .unwrap_or(Accidental::Natural);
+
+        Self {
+            name: self.name,
+            acc: key_acc,
+            octave: self.octave,
+        }
+    }
+}
+
+// ── rust-music-theory 互转 ────────────────────────────────
+
+use crate::rmt;
+
+impl From<NoteName> for rmt::note::NoteLetter {
+    fn from(n: NoteName) -> Self {
+        match n {
+            NoteName::C => rmt::note::NoteLetter::C,
+            NoteName::D => rmt::note::NoteLetter::D,
+            NoteName::E => rmt::note::NoteLetter::E,
+            NoteName::F => rmt::note::NoteLetter::F,
+            NoteName::G => rmt::note::NoteLetter::G,
+            NoteName::A => rmt::note::NoteLetter::A,
+            NoteName::B => rmt::note::NoteLetter::B,
+        }
+    }
+}
+
+impl From<rmt::note::NoteLetter> for NoteName {
+    fn from(n: rmt::note::NoteLetter) -> Self {
+        match n {
+            rmt::note::NoteLetter::C => NoteName::C,
+            rmt::note::NoteLetter::D => NoteName::D,
+            rmt::note::NoteLetter::E => NoteName::E,
+            rmt::note::NoteLetter::F => NoteName::F,
+            rmt::note::NoteLetter::G => NoteName::G,
+            rmt::note::NoteLetter::A => NoteName::A,
+            rmt::note::NoteLetter::B => NoteName::B,
+        }
+    }
+}
+
+/// 将 rmt `PitchSymbol` 拆解为 sonus 的 `(NoteName, Accidental)`。
+pub fn pitch_symbol_to_name_acc(ps: rmt::note::PitchSymbol) -> (NoteName, Accidental) {
+    use rmt::note::PitchSymbol::*;
+    match ps {
+        Bs => (NoteName::B, Accidental::Sharp),
+        C => (NoteName::C, Accidental::Natural),
+        Cs => (NoteName::C, Accidental::Sharp),
+        Db => (NoteName::D, Accidental::Flat),
+        D => (NoteName::D, Accidental::Natural),
+        Ds => (NoteName::D, Accidental::Sharp),
+        Eb => (NoteName::E, Accidental::Flat),
+        E => (NoteName::E, Accidental::Natural),
+        Es => (NoteName::E, Accidental::Sharp),
+        F => (NoteName::F, Accidental::Natural),
+        Fs => (NoteName::F, Accidental::Sharp),
+        Gb => (NoteName::G, Accidental::Flat),
+        G => (NoteName::G, Accidental::Natural),
+        Gs => (NoteName::G, Accidental::Sharp),
+        Ab => (NoteName::A, Accidental::Flat),
+        A => (NoteName::A, Accidental::Natural),
+        As => (NoteName::A, Accidental::Sharp),
+        Bb => (NoteName::B, Accidental::Flat),
+        B => (NoteName::B, Accidental::Natural),
+        Cb => (NoteName::C, Accidental::Flat),
+        Fb => (NoteName::F, Accidental::Flat),
+    }
+}
+
+/// 将 sonus 的 `(NoteName, Accidental)` 映射为 rmt `PitchSymbol`。
+///
+/// 双升 / 双降等 rmt 无法直接表示的变音会按音级类等价到升号拼写。
+pub fn name_acc_to_pitch_symbol(name: NoteName, acc: Accidental) -> rmt::note::PitchSymbol {
+    use rmt::note::PitchSymbol::*;
+    match (name, acc) {
+        (NoteName::B, Accidental::Sharp) => Bs,
+        (NoteName::C, Accidental::Natural) => C,
+        (NoteName::C, Accidental::Sharp) => Cs,
+        (NoteName::D, Accidental::Flat) => Db,
+        (NoteName::D, Accidental::Natural) => D,
+        (NoteName::D, Accidental::Sharp) => Ds,
+        (NoteName::E, Accidental::Flat) => Eb,
+        (NoteName::E, Accidental::Natural) => E,
+        (NoteName::E, Accidental::Sharp) => Es,
+        (NoteName::F, Accidental::Natural) => F,
+        (NoteName::F, Accidental::Sharp) => Fs,
+        (NoteName::G, Accidental::Flat) => Gb,
+        (NoteName::G, Accidental::Natural) => G,
+        (NoteName::G, Accidental::Sharp) => Gs,
+        (NoteName::A, Accidental::Flat) => Ab,
+        (NoteName::A, Accidental::Natural) => A,
+        (NoteName::A, Accidental::Sharp) => As,
+        (NoteName::B, Accidental::Flat) => Bb,
+        (NoteName::B, Accidental::Natural) => B,
+        (NoteName::C, Accidental::Flat) => Cb,
+        (NoteName::F, Accidental::Flat) => Fb,
+        _ => {
+            let pc = PitchClass::new(
+                ((((name.base_semitone() + acc.semitone_offset()) % 12) + 12) % 12) as u8,
+            );
+            let (sn, sa) = pc.spell_sharp();
+            name_acc_to_pitch_symbol(sn, sa)
+        }
+    }
+}
+
+impl From<Pitch> for rmt::note::Pitch {
+    fn from(p: Pitch) -> Self {
+        rmt::note::Pitch::new(p.name.into(), p.acc.semitone_offset() as i8)
+    }
+}
+
+impl From<rmt::note::Pitch> for Pitch {
+    fn from(p: rmt::note::Pitch) -> Self {
+        let name: NoteName = p.letter.into();
+        let acc = Accidental::from_offset(p.accidental as i8);
+        Pitch::new(name, acc, None)
+    }
+}
+
+impl From<PitchClass> for rmt::note::Pitch {
+    fn from(pc: PitchClass) -> Self {
+        let (name, acc) = pc.spell_sharp();
+        rmt::note::Pitch::new(name.into(), acc.semitone_offset() as i8)
+    }
+}
+
+// ── KeySignature 集成 ─────────────────────────────────────
+
+/// 在指定调性上下文中，为音级类选择正确的等音拼写。
+///
+/// 利用 rmt 的 `KeySignature::get_preferred_spelling` 实现。
+/// 例如在 F 大调中，音级类 5 (G) 保持 G，但在 Bb 大调中，
+/// 音级类 10 会拼写为 Bb 而非 A#。
+pub fn spell_in_key(pc: PitchClass, key_root: NoteName, key_mode: Option<rmt::scale::Mode>) -> (NoteName, Accidental) {
+    let tonic = rmt::note::Pitch::new(key_root.into(), 0);
+    let ks = match key_mode {
+        Some(mode) => rmt::note::KeySignature::new_with_mode(tonic, Some(mode)),
+        None => rmt::note::KeySignature::new(tonic),
+    };
+    let rmt_pitch: rmt::note::Pitch = pc.into();
+    let symbol = ks.get_preferred_spelling(rmt_pitch);
+    pitch_symbol_to_name_acc(symbol)
+}
+
+/// 通过 rmt 的 `Pitch::from_u8_with_scale_context` 进行调性感知的音高创建。
+pub fn pitch_from_pc_with_context(
+    pc_value: u8,
+    _key_root: NoteName,
+    key_mode: Option<rmt::scale::Mode>,
+    direction: rmt::scale::Direction,
+) -> Pitch {
+    let p = rmt::note::Pitch::from_u8_with_scale_context(pc_value, key_mode, direction);
+    Pitch::from(p)
 }
 
 // ── 测试 ──────────────────────────────────────────────────
@@ -416,5 +621,71 @@ mod tests {
             Pitch::new(NoteName::E, Accidental::Natural, None).display(),
             "E"
         );
+    }
+
+    // ── MIDI 计算测试 ──
+
+    #[test]
+    fn test_to_midi_c4() {
+        let c4 = Pitch::new(NoteName::C, Accidental::Natural, Some(4));
+        assert_eq!(c4.to_midi(), Some(60));
+    }
+
+    #[test]
+    fn test_to_midi_a4() {
+        let a4 = Pitch::new(NoteName::A, Accidental::Natural, Some(4));
+        assert_eq!(a4.to_midi(), Some(69));
+    }
+
+    #[test]
+    fn test_to_midi_sharp() {
+        let f_sharp = Pitch::new(NoteName::F, Accidental::Sharp, Some(4));
+        assert_eq!(f_sharp.to_midi(), Some(66));
+    }
+
+    #[test]
+    fn test_to_midi_flat() {
+        let b_flat = Pitch::new(NoteName::B, Accidental::Flat, Some(3));
+        assert_eq!(b_flat.to_midi(), Some(58));
+    }
+
+    #[test]
+    fn test_to_midi_no_octave() {
+        let c = Pitch::new(NoteName::C, Accidental::Natural, None);
+        assert_eq!(c.to_midi(), None);
+    }
+
+    #[test]
+    fn test_to_midi_out_of_range() {
+        let low = Pitch::new(NoteName::C, Accidental::Natural, Some(0));
+        assert_eq!(low.to_midi(), Some(12));
+        let high = Pitch::new(NoteName::G, Accidental::Natural, Some(9));
+        assert_eq!(high.to_midi(), Some(127));
+    }
+
+    // ── 调号应用测试 ──
+
+    #[test]
+    fn test_apply_key_signature_c_major() {
+        // C 大调：无升降号，所有音保持 Natural
+        let f = Pitch::new(NoteName::F, Accidental::Natural, Some(4));
+        let result = f.apply_key_signature(NoteName::C, None);
+        assert_eq!(result.acc, Accidental::Natural);
+    }
+
+    #[test]
+    fn test_apply_key_signature_g_major() {
+        // G 大调：F#
+        let f = Pitch::new(NoteName::F, Accidental::Natural, Some(4));
+        let result = f.apply_key_signature(NoteName::G, None);
+        assert_eq!(result.acc, Accidental::Sharp);
+    }
+
+    #[test]
+    fn test_apply_key_signature_explicit_acc_preserved() {
+        // 已有显式变音记号的音高不被调号修改
+        let f_flat = Pitch::new(NoteName::F, Accidental::Flat, Some(4));
+        let result = f_flat.apply_key_signature(NoteName::G, None);
+        assert_eq!(result.acc, Accidental::Flat);
     }
 }
