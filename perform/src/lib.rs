@@ -88,7 +88,8 @@ pub struct PerfDuration {
 impl PerfDuration {
     /// 计算拍数（以全音符 = 1.0 为基准）。
     pub fn beats(&self) -> f64 {
-        let base = 4.0 / self.base as f64;
+        let base = self.base.max(1) as f64;
+        let base = 4.0 / base;
         if self.dotted {
             base * 1.5
         } else {

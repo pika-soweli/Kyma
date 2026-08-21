@@ -55,7 +55,7 @@ const ALL_SCALE_TYPES: [ScaleType; 30] = [
 ];
 
 fn scale_to_u8(st: ScaleType) -> u8 {
-    ALL_SCALE_TYPES.iter().position(|&s| s == st).unwrap() as u8
+    ALL_SCALE_TYPES.iter().position(|&s| s == st).unwrap_or(0) as u8
 }
 
 fn acc_to_u8(a: Accidental) -> u8 {
@@ -225,7 +225,7 @@ fn encode_event(w: &mut Writer, event: &MeasureEvent) {
                 w.duration(&note.duration);
             } else {
                 w.u8(0);
-                let midi = note.to_midi().unwrap_or(60);
+                let midi = note.to_midi().expect("note pitch has no octave or is out of MIDI range");
                 w.u8(midi);
                 w.duration(&note.duration);
                 w.u8(note.velocity());
@@ -250,7 +250,7 @@ fn encode_event(w: &mut Writer, event: &MeasureEvent) {
         }
         MeasureEvent::Grace(note) => {
             w.u8(5);
-            let midi = note.to_midi().unwrap_or(60);
+            let midi = note.to_midi().expect("grace note pitch has no octave or is out of MIDI range");
             w.u8(midi);
             w.duration(&note.duration);
             w.u8(note.velocity());
@@ -293,7 +293,7 @@ fn encode_control(w: &mut Writer, ctrl: &LocalControl) {
 }
 
 fn encode_chord(w: &mut Writer, chord: &Chord) {
-    let midis = chord.to_midi(4).unwrap_or_else(|| vec![60]);
+    let midis = chord.to_midi(4).expect("chord cannot be resolved to valid MIDI notes");
     w.u8(midis.len() as u8);
     for midi in &midis {
         w.u8(*midi);
@@ -445,6 +445,33 @@ mod tests {
                 assert_eq!(events.len(), 3);
             }
             _ => panic!("expected Tuplet"),
+        }
+    }
+
+    #[test]
+    fn test_encode_read_grace() {
+        let mut score = Score::empty();
+        let mut track = Track::new("t".into(), 0);
+        let mut section = Section::new("A".into());
+        let mut m = Measure::new(0);
+
+        let grace_note = Note::new_note(
+            Pitch::new(NoteName::D, Accidental::Natural, Some(5)),
+            Duration::eighth(),
+            0,
+        );
+        m.push_event(MeasureEvent::Grace(grace_note));
+        section.push_measure(m);
+        track.push_section(section);
+        score.push_track(track);
+
+        let perf = encode_and_read(&score);
+        match &perf.tracks[0].sections[0].measures[0].events[0] {
+            PerfEvent::Grace { midi, velocity, .. } => {
+                assert_eq!(*midi, 74); // D5
+                assert_eq!(*velocity, 100);
+            }
+            _ => panic!("expected Grace"),
         }
     }
 

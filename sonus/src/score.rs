@@ -80,6 +80,8 @@ pub struct Tuplet {
 
 impl Tuplet {
     pub fn new(ratio: (u32, u32)) -> Self {
+        assert!(ratio.0 > 0, "tuplet numerator must be > 0");
+        assert!(ratio.1 > 0, "tuplet denominator must be > 0");
         Self { ratio, events: Vec::new() }
     }
 

@@ -220,6 +220,9 @@ fn read_event(r: &mut Reader) -> Result<PerfEvent, ReadError> {
         }
         2 => {
             let midi_count = r.u8()?;
+            if midi_count == 0 {
+                return Err(ReadError::BadEventTag(2));
+            }
             let mut midis = Vec::with_capacity(midi_count as usize);
             for _ in 0..midi_count {
                 midis.push(r.u8()?);
@@ -332,5 +335,13 @@ mod tests {
         assert_eq!(score.title, None);
         assert_eq!(score.global_tempo, 120); // default
         assert_eq!(score.tracks.len(), 0);
+    }
+
+    #[test]
+    fn test_read_canon_bm() {
+        let bytes = std::fs::read("../examples/canon.bm").expect("canon.bm not found");
+        let score = read(&bytes).expect("failed to read canon.bm");
+        assert_eq!(score.title.as_deref(), Some("Canon in D — Johann Pachelbel"));
+        assert!(!score.tracks.is_empty());
     }
 }

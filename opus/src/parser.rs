@@ -45,7 +45,7 @@ pub mod rules;
 use crate::lexer::CompileError;
 use crate::token::*;
 use sonus::{
-    rmt, Accidental, Duration, NoteName, PedalKind, Pitch, ScaleDirection, ScaleType, Score,
+    rmt, Accidental, Duration, NoteName, Pitch, ScaleDirection, ScaleType, Score,
 };
 use rules::{HeaderParser, TrackParser};
 
@@ -61,7 +61,7 @@ pub trait ParseRule<T> {
 
 // ── ParseContext ───────────────────────────────────────────
 
-/// 解析共享上下文 — 持有 token 流、位置指针、默认时值与调性/踏板状态。
+/// 解析共享上下文 — 持有 token 流、位置指针、默认时值与调性状态。
 ///
 /// 提供 token 操作（peek / advance / expect）和通用子解析
 /// （pitch / duration / scale_type）供各 [`ParseRule`] 实现使用。
@@ -73,8 +73,6 @@ pub struct ParseContext {
     pub(crate) key_root: Option<NoteName>,
     /// 当前调式（Ionian/Dorian/...）。
     pub(crate) key_mode: Option<rmt::scale::Mode>,
-    /// 踏板状态：Vec<(轨道ID, 踏板类型)>。
-    pub(crate) pedals: Vec<(usize, PedalKind)>,
 }
 
 impl ParseContext {
@@ -85,7 +83,6 @@ impl ParseContext {
             default_duration: Duration::quarter(),
             key_root: None,
             key_mode: None,
-            pedals: Vec::new(),
         }
     }
 
