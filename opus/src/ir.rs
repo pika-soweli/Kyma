@@ -481,4 +481,64 @@ mod tests {
         let perf = encode_and_read(&score);
         assert_eq!(perf.tracks.len(), 0);
     }
+
+    #[test]
+    fn test_encode_read_tuplet_with_chord() {
+        // 和弦嵌套在连音符内：encode → decode 全链路
+        let mut score = Score::empty();
+        let mut track = Track::new("t".into(), 0);
+        let mut section = Section::new("A".into());
+        let mut m = Measure::new(0);
+
+        let mut tuplet = Tuplet::new((3, 2));
+
+        // 和弦 D major (MIDI: 62=D4, 66=F#4, 69=A4)
+        let sym = ChordSymbol::new(Pitch::new(NoteName::D, Accidental::Natural, None))
+            .with_quality(ChordQuality::Maj);
+        tuplet.push_event(MeasureEvent::Chord(Chord::new_normal(sym, Duration::eighth(), 0)));
+
+        // 两个单音
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::G, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        m.push_event(MeasureEvent::Tuplet(tuplet));
+        section.push_measure(m);
+        track.push_section(section);
+        score.push_track(track);
+
+        let perf = encode_and_read(&score);
+        match &perf.tracks[0].sections[0].measures[0].events[0] {
+            PerfEvent::Tuplet { ratio, events } => {
+                assert_eq!(*ratio, (3, 2));
+                assert_eq!(events.len(), 3);
+                // 第一个事件是 Chord
+                match &events[0] {
+                    PerfEvent::Chord { midis, .. } => {
+                        assert_eq!(midis.len(), 3, "D大三和弦应包含3个音");
+                        assert!(midis.contains(&62), "应含 D4 (MIDI 62)");
+                        assert!(midis.contains(&66), "应含 F#4 (MIDI 66)");
+                        assert!(midis.contains(&69), "应含 A4 (MIDI 69)");
+                    }
+                    _ => panic!("expected Chord as first tuplet event"),
+                }
+                // 第二、三个事件是 Note
+                match &events[1] {
+                    PerfEvent::Note { midi, .. } => assert_eq!(*midi, 64), // E4
+                    _ => panic!("expected Note"),
+                }
+                match &events[2] {
+                    PerfEvent::Note { midi, .. } => assert_eq!(*midi, 67), // G4
+                    _ => panic!("expected Note"),
+                }
+            }
+            _ => panic!("expected Tuplet"),
+        }
+    }
 }

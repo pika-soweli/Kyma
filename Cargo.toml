@@ -8,5 +8,9 @@ sonus = { path = "./sonus" }
 opus = { path = "./opus" }
 perform = { path = "./perform" }
 
+[[example]]
+name = "verify_expressions"
+path = "examples/verify_expressions.rs"
+
 [workspace]
 members = ["sonus", "opus", "perform"]

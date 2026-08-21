@@ -293,6 +293,7 @@ fn transpose_events(events: &mut [MeasureEvent], semitones: i8) {
 mod tests {
     use super::*;
     use super::super::pitch::{NoteName, Accidental, Pitch};
+    use super::super::chord::{ChordSymbol, ChordQuality};
 
     #[test]
     fn test_time_sig() {
@@ -481,5 +482,75 @@ mod tests {
         assert_eq!(score2.title, Some("Test".to_string()));
         assert_eq!(score2.global_bpm(), 120);
         assert_eq!(score2.tracks.len(), 1);
+    }
+
+    #[test]
+    fn test_chord_in_tuplet() {
+        // 和弦能否嵌套在连音符内：解析 → Tuplet{Chord}
+        let mut tuplet = Tuplet::new((3, 2));
+        let sym = ChordSymbol::new(Pitch::new(NoteName::D, Accidental::Natural, None))
+            .with_quality(ChordQuality::Maj);
+        tuplet.push_event(MeasureEvent::Chord(Chord::new_normal(sym, Duration::eighth(), 0)));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::F, Accidental::Sharp, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+
+        let mut measure = Measure::new(0);
+        measure.push_event(MeasureEvent::Tuplet(tuplet));
+        assert_eq!(measure.events.len(), 1);
+
+        // 检查 all_notes 能正确进入 tuplet 内部找和弦
+        let mut score = Score::empty();
+        let mut track = Track::new("t".to_string(), 0);
+        let mut section = Section::new("A".to_string());
+        section.push_measure(measure);
+        track.push_section(section);
+        score.push_track(track);
+
+        let chords = score.all_chords();
+        assert_eq!(chords.len(), 1, "and弦应能在 tuplet 内被找到");
+        let chord = chords[0];
+        assert_eq!(chord.symbol.root.name, NoteName::D);
+        assert_eq!(chord.symbol.quality, Some(ChordQuality::Maj));
+    }
+
+    #[test]
+    fn test_note_in_tuplet() {
+        let mut tuplet = Tuplet::new((3, 2));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::C, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::E, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+        tuplet.push_event(MeasureEvent::Note(Note::new_note(
+            Pitch::new(NoteName::G, Accidental::Natural, Some(4)),
+            Duration::eighth(),
+            0,
+        )));
+
+        let mut score = Score::empty();
+        let mut track = Track::new("t".to_string(), 0);
+        let mut section = Section::new("A".to_string());
+        section.push_measure({
+            let mut m = Measure::new(0);
+            m.push_event(MeasureEvent::Tuplet(tuplet));
+            m
+        });
+        track.push_section(section);
+        score.push_track(track);
+
+        assert_eq!(score.all_notes().len(), 3, "tuplet 内的三个音符都应被找到");
     }
 }
